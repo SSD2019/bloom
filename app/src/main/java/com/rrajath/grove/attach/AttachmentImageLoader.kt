@@ -7,6 +7,7 @@ import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
+import coil3.svg.SvgDecoder
 
 /**
  * The app-wide Coil [ImageLoader] for attachments. Images come from SAF
@@ -25,6 +26,8 @@ object AttachmentImageLoader {
     fun build(context: Context): ImageLoader =
         ImageLoader.Builder(context)
             .components {
+                add(SvgzDecoder.Factory())
+                add(SvgDecoder.Factory())
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     add(AnimatedImageDecoder.Factory())
                 } else {

@@ -52,7 +52,7 @@ object ShareIntake {
      */
     suspend fun consumeShare(app: GroveApplication, payload: SharedPayload) {
         val settings = app.settingsRepository.settings.first()
-        if (settings.vaultTreeUri == null) {
+        if (!settings.isVaultConfigured) {
             toast(app, "Set a sync folder before sharing to ${app.getString(R.string.app_name)}")
             return
         }

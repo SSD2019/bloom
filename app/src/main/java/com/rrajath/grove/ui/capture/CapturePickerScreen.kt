@@ -129,11 +129,22 @@ private fun TemplateRow(template: CaptureTemplate, onClick: () -> Unit) {
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                template.name,
-                fontFamily = PlexSans, fontWeight = FontWeight.SemiBold,
-                fontSize = 15.5.sp, color = c.ink,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    template.name,
+                    fontFamily = PlexSans, fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.5.sp, color = c.ink,
+                )
+                template.shortcutKey?.takeIf { it.isNotBlank() }?.let { key ->
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "[$key]",
+                        fontFamily = PlexMono,
+                        fontSize = 12.sp,
+                        color = c.accent,
+                    )
+                }
+            }
             Text(
                 if (template.kind == TemplateKind.ROAM_NODE) {
                     val stem = "${template.filenamePattern}.org"

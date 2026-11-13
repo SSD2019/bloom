@@ -11,12 +11,19 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import com.rrajath.grove.attach.AttachmentImageLoader
+import com.rrajath.grove.capture.OfflineCaptureQueue
 import com.rrajath.grove.capture.SharedPayload
 import com.rrajath.grove.capture.ShortcutSyncer
 import com.rrajath.grove.capture.TemplatesRepository
 import com.rrajath.grove.data.FavoritesRepository
 import com.rrajath.grove.data.GroveDatabase
+import com.rrajath.grove.data.PendingCaptureDatabase
 import com.rrajath.grove.data.RoomNoteIndex
+import com.rrajath.grove.remote.EmacsClient
+import com.rrajath.grove.remote.EmacsConfigMapper
+import com.rrajath.grove.remote.EmacsUnreachableException
+import com.rrajath.grove.settings.VaultSource
+import com.rrajath.grove.vault.RemoteFileStore
 import com.rrajath.grove.icon.AppIconManager
 import com.rrajath.grove.icon.NotificationAppearance
 import com.rrajath.grove.org.LocalDates
@@ -191,6 +198,20 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
     private val widgetRefreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
+    private val emacsUrlState = MutableStateFlow("")
+
+    val emacsClient: EmacsClient by lazy {
+        EmacsClient(baseUrlProvider = { emacsUrlState.value })
+    }
+
+    val pendingCaptureDatabase: PendingCaptureDatabase by lazy {
+        PendingCaptureDatabase.open(this)
+    }
+
+    val offlineCaptureQueue: OfflineCaptureQueue by lazy {
+        OfflineCaptureQueue(pendingCaptureDatabase.pendingCaptureDao())
+    }
+
     val syncManager: SyncManager by lazy {
         SyncManager(
             this, appScope, database,
@@ -216,24 +237,56 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                 }
                 widgetRefreshRequests.tryEmit(Unit)
             },
+            onBeforeSync = { log ->
+                val settings = settingsRepository.settings.first()
+                if (settings.isEmacsManaged) {
+                    emacsUrlState.value = settings.emacsServerUrl
+                    try {
+                        val config = emacsClient.getConfig()
+                        settingsRepository.applyEmacsConfig(config)
+                        val mapped = EmacsConfigMapper.toCaptureTemplates(config)
+                        if (mapped.isNotEmpty()) {
+                            templatesRepository.replaceEmacsTemplates(mapped)
+                        }
+                        log("emacs config synced (${mapped.size} capture templates)")
+                        val activeVault = vault.value
+                        if (activeVault != null) {
+                            val flushed = offlineCaptureQueue.flush(activeVault, keywords.value)
+                            if (flushed.flushed > 0) {
+                                log("flushed ${flushed.flushed} offline capture(s)")
+                            }
+                        }
+                    } catch (e: EmacsUnreachableException) {
+                        log("emacs server unreachable (offline): ${e.message}")
+                    } catch (e: Exception) {
+                        log("emacs config sync error: ${e.message}")
+                    }
+                }
+            },
         )
     }
 
     /**
-     * The active vault file store, swapping whenever the configured tree URI
-     * changes. [TestVaultHook.root] is a test-only override (null in any
-     * `release` build — the path is R8-stripped) that forces a plain-directory
-     * store for Maestro / the macrobenchmark module; see `debug.DebugTestVault`.
+     * The active vault file store, swapping whenever the configured tree URI,
+     * vault source, or Emacs server URL changes. [TestVaultHook.root] is a
+     * test-only override (null in any `release` build — the path is
+     * R8-stripped) that forces a plain-directory store for Maestro / the
+     * macrobenchmark module; see `debug.DebugTestVault`.
      */
     val fileStore: StateFlow<FileStore?> by lazy {
         combine(
+            settingsRepository.settings.map { it.vaultSource }.distinctUntilChanged(),
             settingsRepository.settings.map { it.vaultTreeUri }.distinctUntilChanged(),
+            settingsRepository.settings.map { it.emacsServerUrl }.distinctUntilChanged(),
             settingsRepository.settings.map { it.ignoreList }.distinctUntilChanged(),
             TestVaultHook.root,
-        ) { uriString, ignoreListText, testRoot ->
+        ) { source, uriString, emacsUrl, ignoreListText, testRoot ->
+            emacsUrlState.value = emacsUrl
             val ignore = IgnorePatterns(ignoreListText)
             when {
                 testRoot != null -> JvmFileStore(testRoot, ignore)
+                source == VaultSource.REMOTE_EMACS && emacsUrl.isNotBlank() ->
+                    RemoteFileStore(this, emacsClient)
                 uriString != null -> SafFileStore(this, uriString.toUri(), ignore)
                 else -> null
             }?.let(::LineEndingFileStore)

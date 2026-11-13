@@ -283,7 +283,7 @@ class NotebooksViewModel(
             settings.showNotebookFileIcons,
             settings.flattenNotebookFolders,
             expandedFolders,
-            vaultDisplayName(settings.vaultTreeUri),
+            if (settings.isEmacsManaged) "Emacs (${settings.emacsServerUrl})" else vaultDisplayName(settings.vaultTreeUri),
             settings.folderColors,
             settings.pinnedFolders,
             settings.pinnedItems,
@@ -1042,9 +1042,11 @@ class DocumentViewModel(
             }
         } }
         viewModelScope.launch {
-            _allTags.value = database.indexDao().allTagStrings()
+            val indexed = database.indexDao().allTagStrings()
                 .flatMap { it.split(':') }
                 .filter { it.isNotEmpty() }
+            val saved = settingsRepository.settings.first().emacsSavedTags
+            _allTags.value = (indexed + saved)
                 .distinct()
                 .sorted()
         }

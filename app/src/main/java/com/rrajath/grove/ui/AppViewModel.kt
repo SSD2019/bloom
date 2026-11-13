@@ -29,6 +29,8 @@ import com.rrajath.grove.settings.SettingsSerialization
 import com.rrajath.grove.settings.SyncMode
 import com.rrajath.grove.settings.ThemeMode
 import com.rrajath.grove.settings.ThemePreference
+import com.rrajath.grove.settings.VaultSource
+import com.rrajath.grove.remote.EmacsClient
 import com.rrajath.grove.sync.SyncTrigger
 import com.rrajath.grove.ui.newbadge.NewBadgeState
 import com.rrajath.grove.ui.editor.LinkSearchItem
@@ -304,7 +306,43 @@ class AppViewModel(
     fun resetNewBadges() = viewModelScope.launch { settingsRepository.resetNewBadges() }
 
     fun setVaultTreeUri(uri: String) =
-        viewModelScope.launch { settingsRepository.setVaultTreeUri(uri) }
+        viewModelScope.launch {
+            settingsRepository.setVaultSource(VaultSource.LOCAL_SAF)
+            settingsRepository.setVaultTreeUri(uri)
+        }
+
+    fun setVaultSource(source: VaultSource) =
+        viewModelScope.launch { settingsRepository.setVaultSource(source) }
+
+    fun setEmacsServerUrl(url: String) =
+        viewModelScope.launch { settingsRepository.setEmacsServerUrl(url) }
+
+    fun connectRemoteEmacs(url: String) =
+        viewModelScope.launch {
+            settingsRepository.setEmacsServerUrl(url)
+            settingsRepository.setVaultSource(VaultSource.REMOTE_EMACS)
+            sync.requestSync("remote emacs connected")
+        }
+
+    suspend fun testEmacsConnection(url: String): Result<String> {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("Enter a server URL"))
+        return try {
+            val start = System.currentTimeMillis()
+            val ping = EmacsClient(baseUrlProvider = { trimmed }).ping()
+            val elapsed = System.currentTimeMillis() - start
+            Result.success("Connected (${ping.orgDirectory}, ${elapsed}ms)")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun requestSyncNow() {
+        sync.requestSync("manual sync")
+    }
+
+    val pendingCaptureCount: StateFlow<Int> = app.offlineCaptureQueue.pendingCount
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     fun setSyncMode(mode: SyncMode) =
         viewModelScope.launch { settingsRepository.setSyncMode(mode) }

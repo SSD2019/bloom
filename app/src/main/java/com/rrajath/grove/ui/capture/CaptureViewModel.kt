@@ -9,6 +9,7 @@ import com.rrajath.grove.GroveApplication
 import com.rrajath.grove.capture.CaptureContext
 import com.rrajath.grove.capture.CaptureInserter
 import com.rrajath.grove.capture.CaptureTemplate
+import com.rrajath.grove.capture.OfflineCaptureQueue
 import com.rrajath.grove.capture.RoamFileId
 import com.rrajath.grove.capture.RoamNodeCreator
 import com.rrajath.grove.capture.RoamNodeResult
@@ -20,6 +21,7 @@ import com.rrajath.grove.data.GroveDatabase
 import com.rrajath.grove.org.OrgDocument
 import com.rrajath.grove.org.OrgMutations
 import com.rrajath.grove.org.OrgParser
+import com.rrajath.grove.remote.EmacsUnreachableException
 import com.rrajath.grove.settings.SettingsSource
 import com.rrajath.grove.sync.SyncTrigger
 import com.rrajath.grove.ui.editor.AutoLinkSuggestion
@@ -58,6 +60,7 @@ class CaptureViewModel(
     private val vaultFlow: StateFlow<Vault?>,
     private val settings: SettingsSource,
     private val dispatchers: AppDispatchers,
+    private val offlineCaptureQueue: OfflineCaptureQueue? = null,
 ) : ViewModel() {
 
     val templates: StateFlow<List<CaptureTemplate>> = templatesRepository.templates
@@ -83,9 +86,11 @@ class CaptureViewModel(
 
     init {
         viewModelScope.launch {
-            _allTags.value = database.indexDao().allTagStrings()
+            val indexed = database.indexDao().allTagStrings()
                 .flatMap { it.split(':') }
                 .filter { it.isNotEmpty() }
+            val saved = settings.settings.first().emacsSavedTags
+            _allTags.value = (indexed + saved)
                 .distinct()
                 .sorted()
         }
@@ -165,6 +170,21 @@ class CaptureViewModel(
                 sync.requestReindex(fileName, newText, "capture saved")
                 draftInsertion = null
                 _saveState.value = SaveState.Saved(fileName)
+            } catch (e: EmacsUnreachableException) {
+                if (offlineCaptureQueue != null && template.kind == TemplateKind.PLAIN) {
+                    offlineCaptureQueue.enqueue(
+                        targetFile = template.targetFile,
+                        location = template.location,
+                        entry = entryText,
+                        bodyOnly = bodyOnly,
+                        today = LocalDate.from(context.now),
+                        error = e.message,
+                    )
+                    draftInsertion = null
+                    _saveState.value = SaveState.Saved("${template.targetFile} (queued offline)")
+                } else {
+                    _saveState.value = SaveState.Failed(e.message ?: "Emacs server unreachable")
+                }
             } catch (e: Exception) {
                 _saveState.value = SaveState.Failed(e.message ?: "Capture failed")
             }
@@ -220,7 +240,7 @@ class CaptureViewModel(
         // (Maestro, :macrobenchmark): it feeds GroveApplication.fileStore
         // without ever writing vaultTreeUri, so treat it as a configured vault
         // here too. Always null in release (R8 strips the path).
-        if (currentSettings.vaultTreeUri == null && TestVaultHook.root.value == null) {
+        if (!currentSettings.isVaultConfigured && TestVaultHook.root.value == null) {
             error("No sync folder configured")
         }
         // On a cold start (e.g. launched via app shortcut) the vault may
@@ -342,7 +362,7 @@ class CaptureViewModel(
         context: CaptureContext,
     ): Pair<String, String> {
         val currentSettings = settings.settings.first()
-        if (currentSettings.vaultTreeUri == null && TestVaultHook.root.value == null) {
+        if (!currentSettings.isVaultConfigured && TestVaultHook.root.value == null) {
             error("No sync folder configured")
         }
         val vault = vaultFlow.filterNotNull().first()
@@ -443,6 +463,7 @@ class CaptureViewModel(
                     app.vault,
                     app.settingsRepository,
                     app.dispatchers,
+                    app.offlineCaptureQueue,
                 ) as T
             }
         }

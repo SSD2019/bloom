@@ -118,6 +118,10 @@ data class CaptureTemplate(
      * The file-level `:ID:` drawer is added automatically ([RoamFileId]), not written here.
      */
     val newFileTemplate: String = "#+title: %?",
+    /** Emacs `org-capture-templates` shortcut key (e.g. `"t"`, `"j"`), when synced from Emacs. */
+    val shortcutKey: String? = null,
+    /** True when this template was synced from a remote Emacs server. */
+    val fromEmacs: Boolean = false,
 )
 
 object TemplateSerializer {

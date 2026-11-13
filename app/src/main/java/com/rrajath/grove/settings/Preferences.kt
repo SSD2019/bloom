@@ -329,3 +329,14 @@ sealed interface AgendaStateFilter {
         }
     }
 }
+
+/** Where the vault's `.org` files and settings live. */
+enum class VaultSource(val storageKey: String, val label: String) {
+    LOCAL_SAF("local_saf", "Local Folder"),
+    REMOTE_EMACS("remote_emacs", "Remote Emacs Server");
+
+    companion object {
+        fun fromStorage(value: String?): VaultSource =
+            entries.firstOrNull { it.storageKey == value } ?: LOCAL_SAF
+    }
+}

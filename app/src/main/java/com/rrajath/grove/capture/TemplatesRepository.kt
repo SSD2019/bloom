@@ -25,6 +25,16 @@ class TemplatesRepository(private val context: Context) {
         context.templatesDataStore.edit { it[KEY] = TemplateSerializer.encode(list) }
     }
 
+    /**
+     * Replaces Emacs-synced templates while preserving any user-created local templates.
+     * When [emacsTemplates] is empty, existing templates are left untouched.
+     */
+    suspend fun replaceEmacsTemplates(emacsTemplates: List<CaptureTemplate>) {
+        if (emacsTemplates.isEmpty()) return
+        val localOnly = templates.first().filterNot { it.fromEmacs }
+        save(emacsTemplates + localOnly)
+    }
+
     suspend fun upsert(template: CaptureTemplate) {
         val current = templates.first()
         val updated = if (current.any { it.id == template.id }) {

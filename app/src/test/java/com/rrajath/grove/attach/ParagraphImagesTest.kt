@@ -57,8 +57,9 @@ class ParagraphImagesTest {
     }
 
     @Test
-    fun `svg and org targets never render as images`() {
-        assertFalse(hasImageLink("[[attachment:diagram.svg]]"))
+    fun `svg and svgz render as images while org and remote targets do not`() {
+        assertTrue(hasImageLink("[[attachment:diagram.svg]]"))
+        assertTrue(hasImageLink("[[attachment:diagram.svgz]]"))
         assertFalse(hasImageLink("[[file:other.org]]"))
         assertFalse(hasImageLink("[[https://x.com/a.png]]"))
         assertTrue(hasImageLink("[[attachment:PHOTO.HEIC]]"))

@@ -32,7 +32,7 @@ data class LocalAttachment(
 
 object AttachmentLink {
 
-    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif")
+    private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "svg", "svgz")
     private val FILE_SCHEMES = listOf("file+sys:", "file+emacs:", "file:")
     private val SCHEME = Regex("""^[A-Za-z][A-Za-z0-9+.-]*:""")
 
@@ -84,7 +84,7 @@ fun badgeFor(fileName: String): String =
 fun categoryOf(extension: String): AttachmentCategory = when (extension.lowercase()) {
     "pdf", "doc", "docx", "odt", "rtf", "txt", "md", "csv", "xls", "xlsx", "ppt", "pptx", "epub" ->
         AttachmentCategory.DOCUMENT
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "svg", "tiff", "tif" ->
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "svg", "svgz", "tiff", "tif" ->
         AttachmentCategory.IMAGE
     "m4a", "mp3", "wav", "ogg", "flac", "aac", "opus" -> AttachmentCategory.AUDIO
     "mp4", "mov", "mkv", "webm", "3gp", "avi" -> AttachmentCategory.VIDEO

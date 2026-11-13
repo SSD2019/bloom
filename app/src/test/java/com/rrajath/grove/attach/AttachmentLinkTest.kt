@@ -32,11 +32,14 @@ class AttachmentLinkTest {
         assertTrue(AttachmentLink.classify("attachment:x.png", "  ")!!.isImage)
     }
 
-    @Test fun `svg and other files are chips labelled with the file name`() {
+    @Test fun `svg and svgz are inline images while other files are chips`() {
         val svg = AttachmentLink.classify("attachment:logo.svg", null)!!
-        assertFalse(svg.isImage)
+        assertTrue(svg.isImage)
         assertEquals("logo.svg", svg.label)
+        val svgz = AttachmentLink.classify("attachment:logo.svgz", null)!!
+        assertTrue(svgz.isImage)
         val pdf = AttachmentLink.classify("attachment:receipt.pdf", null)!!
+        assertFalse(pdf.isImage)
         assertEquals(AttachmentCategory.DOCUMENT, pdf.category)
         assertEquals("PDF", pdf.badge)
     }

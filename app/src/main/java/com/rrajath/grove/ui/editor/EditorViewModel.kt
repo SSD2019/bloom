@@ -242,9 +242,11 @@ class EditorViewModel(
                 _state.value = EditorUiState(loading = false, error = "Note not found")
                 return@launch
             }
-            val tags = database.indexDao().allTagStrings()
+            val indexedTags = database.indexDao().allTagStrings()
                 .flatMap { it.split(':') }
                 .filter { it.isNotEmpty() }
+            val savedTags = settings.settings.first().emacsSavedTags
+            val tags = (indexedTags + savedTags)
                 .distinct()
                 .sorted()
                 .toImmutableList()

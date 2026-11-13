@@ -106,6 +106,9 @@ data class GroveSettings(
     val exactAlarmPromptHandled: Boolean = false,
     /** Persisted SAF tree URI of the sync folder; null until the user picks one. */
     val vaultTreeUri: String? = null,
+    val vaultSource: VaultSource = VaultSource.LOCAL_SAF,
+    val emacsServerUrl: String = "",
+    val emacsSavedTags: Set<String> = emptySet(),
     val syncMode: SyncMode = SyncMode.ON_OPEN_CLOSE,
     val periodicSyncMinutes: Int = 30,
     /** Org TODO keyword config, `|` splits done-type ("TODO IN-PROGRESS | DONE CANCELLED"). */
@@ -313,6 +316,15 @@ data class GroveSettings(
     val roamSuggestionsActive: Boolean
         get() = roamFeaturesEnabled && roamShowSuggestions
 
+    val isVaultConfigured: Boolean
+        get() = when (vaultSource) {
+            VaultSource.LOCAL_SAF -> vaultTreeUri != null
+            VaultSource.REMOTE_EMACS -> emacsServerUrl.isNotBlank()
+        }
+
+    val isEmacsManaged: Boolean
+        get() = vaultSource == VaultSource.REMOTE_EMACS && emacsServerUrl.isNotBlank()
+
     companion object {
         const val DEFAULT_TODO_KEYWORDS = "TODO IN-PROGRESS | DONE CANCELLED"
         const val DEFAULT_SHARE_TARGET = "inbox.org"
@@ -353,6 +365,9 @@ class SettingsRepository(
         val exactAlarmAccessLastKnown = booleanPreferencesKey("exact_alarm_access_last_known")
         val exactAlarmPromptHandled = booleanPreferencesKey("exact_alarm_prompt_handled")
         val vaultTreeUri = stringPreferencesKey("vault_tree_uri")
+        val vaultSource = stringPreferencesKey("vault_source")
+        val emacsServerUrl = stringPreferencesKey("emacs_server_url")
+        val emacsSavedTags = stringPreferencesKey("emacs_saved_tags")
         val syncMode = stringPreferencesKey("sync_mode")
         val periodicSyncMinutes = intPreferencesKey("periodic_sync_minutes")
         val todoKeywords = stringPreferencesKey("todo_keywords")
@@ -475,6 +490,9 @@ class SettingsRepository(
             exactAlarmAccessLastKnown = prefs[Keys.exactAlarmAccessLastKnown],
             exactAlarmPromptHandled = prefs[Keys.exactAlarmPromptHandled] ?: false,
             vaultTreeUri = prefs[Keys.vaultTreeUri],
+            vaultSource = VaultSource.fromStorage(prefs[Keys.vaultSource]),
+            emacsServerUrl = prefs[Keys.emacsServerUrl] ?: "",
+            emacsSavedTags = decodeStringSet(prefs[Keys.emacsSavedTags]),
             syncMode = SyncMode.fromStorage(prefs[Keys.syncMode]),
             periodicSyncMinutes = prefs[Keys.periodicSyncMinutes] ?: 30,
             todoKeywords = prefs[Keys.todoKeywords] ?: GroveSettings.DEFAULT_TODO_KEYWORDS,
@@ -817,6 +835,39 @@ class SettingsRepository(
 
     suspend fun setVaultTreeUri(uri: String) {
         editSettings { it[Keys.vaultTreeUri] = uri }
+    }
+
+    suspend fun setVaultSource(source: VaultSource) {
+        editSettings { it[Keys.vaultSource] = source.storageKey }
+    }
+
+    suspend fun setEmacsServerUrl(url: String) {
+        editSettings { it[Keys.emacsServerUrl] = url.trim() }
+    }
+
+    suspend fun applyEmacsConfig(config: com.rrajath.grove.remote.EmacsConfigDto) {
+        editSettings { prefs ->
+            prefs[Keys.todoKeywords] = config.todoKeywords.ifBlank { GroveSettings.DEFAULT_TODO_KEYWORDS }
+            val prio = config.defaultPriority?.trim()?.firstOrNull()
+            if (prio != null) {
+                prefs[Keys.defaultPriority] = prio.toString()
+            } else {
+                prefs.remove(Keys.defaultPriority)
+            }
+            prefs[Keys.agendaDeadlineWarningDays] = config.deadlineWarningDays.coerceAtLeast(0)
+            config.archiveLocation?.let { arch ->
+                if (!arch.file.isNullOrBlank()) {
+                    prefs[Keys.autoArchiveFile] = arch.file
+                } else {
+                    prefs.remove(Keys.autoArchiveFile)
+                }
+                prefs[Keys.autoArchiveHeadingPath] = arch.headingPath
+            }
+            config.dailiesDirectory?.let { dailies ->
+                prefs[Keys.dailiesDirectory] = dailies
+            }
+            prefs[Keys.emacsSavedTags] = config.savedTags.filter { it.isNotBlank() }.distinct().joinToString(";")
+        }
     }
 
     suspend fun setSyncMode(mode: SyncMode) {

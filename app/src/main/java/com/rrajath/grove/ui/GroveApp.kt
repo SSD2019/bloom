@@ -374,7 +374,7 @@ private fun GroveNavigation(
             ) {
                 GroveDrawerContent(
                     currentRoute = currentRoute,
-                    vaultPath = vaultDisplayPath(settings.vaultTreeUri),
+                    vaultPath = if (settings.isEmacsManaged) settings.emacsServerUrl else vaultDisplayPath(settings.vaultTreeUri),
                     savedSearches = viewModel.savedSearches.collectAsStateWithLifecycle().value,
                     favorites = favorites,
                     logoFollowsTheme = settings.syncAppIconWithTheme,
@@ -421,6 +421,7 @@ private fun GroveNavigation(
                         }
                     },
                     onFolderPicked = viewModel::setVaultTreeUri,
+                    onConnectRemoteEmacs = viewModel::connectRemoteEmacs,
                 )
             }
             composable(Routes.NOTEBOOKS) {
@@ -1006,6 +1007,7 @@ private fun GroveNavigation(
                 )
             }
             composable(Routes.SETTINGS_SYNC) {
+                val pendingCount by viewModel.pendingCaptureCount.collectAsStateWithLifecycle()
                 SettingsSyncScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1013,6 +1015,11 @@ private fun GroveNavigation(
                     onSetPeriodicMinutes = viewModel::setPeriodicSyncMinutes,
                     onOpenSyncLog = { navController.navigate(Routes.SYNC_LOG) },
                     onSetVaultUri = viewModel::setVaultTreeUri,
+                    onSetVaultSource = viewModel::setVaultSource,
+                    onConnectRemoteEmacs = viewModel::connectRemoteEmacs,
+                    onTestEmacsConnection = viewModel::testEmacsConnection,
+                    onSyncNow = viewModel::requestSyncNow,
+                    pendingCaptureCount = pendingCount,
                 )
             }
             composable(Routes.SETTINGS_NOTES) {

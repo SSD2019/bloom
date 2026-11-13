@@ -55,6 +55,8 @@ class SyncManager(
      * removals to reconcile against).
      */
     private val onSyncCompleted: suspend (result: SyncResult?) -> Unit = {},
+    /** Hook run at the start of each full sync pass (used to pull Emacs config & flush offline captures). */
+    private val onBeforeSync: suspend (log: (String) -> Unit) -> Unit = {},
 ) : SyncTrigger {
     private val mutex = Mutex()
     private var engine: SyncEngine? = null
@@ -113,6 +115,7 @@ class SyncManager(
         val engine = engine ?: return
         val messages = java.util.concurrent.ConcurrentLinkedQueue<String>()
         messages.add("sync started ($reason)")
+        onBeforeSync { msg -> messages.add(msg) }
         val result = engine.sync(log = { msg -> messages.add(msg) })
         if (result != null) {
             _lastResult.value = result

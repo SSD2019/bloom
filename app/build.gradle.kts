@@ -333,8 +333,10 @@ dependencies {
     // GIF frames, zoomable viewer, EXIF orientation/tags for photo resizing.
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
+    implementation(libs.coil.svg)
     implementation(libs.telephoto.zoomable.image.coil3)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.okhttp)
 
     // Producer of the baseline profile packaged above (see the androidx.baselineprofile
     // plugin). `./gradlew :app:generateBaselineProfile` runs the generator on a
@@ -354,6 +356,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
     testImplementation(libs.turbine)
     testImplementation(libs.androidx.test.core)

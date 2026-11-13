@@ -24,6 +24,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,9 +51,12 @@ import com.rrajath.grove.ui.theme.grove
 fun OnboardingScreen(
     onDone: () -> Unit,
     onFolderPicked: (String) -> Unit,
+    onConnectRemoteEmacs: (String) -> Unit = {},
 ) {
     val c = MaterialTheme.grove
     val context = LocalContext.current
+    var showEmacsConnect by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var emacsUrl by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -130,6 +137,52 @@ fun OnboardingScreen(
                 fontFamily = PlexSans, fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp, color = c.accentInk,
             )
+        }
+        Spacer(Modifier.height(10.dp))
+        if (!showEmacsConnect) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(c.surface)
+                    .clickable(onClick = { showEmacsConnect = true }),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Connect to remote Emacs server",
+                    fontFamily = PlexSans, fontWeight = FontWeight.Medium,
+                    fontSize = 14.5.sp, color = c.accent,
+                )
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(c.surface)
+                    .padding(14.dp),
+            ) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = emacsUrl,
+                    onValueChange = { emacsUrl = it },
+                    label = { Text("Emacs server URL (WireGuard)") },
+                    placeholder = { Text("http://10.0.0.1:8765") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.Button(
+                    enabled = emacsUrl.isNotBlank(),
+                    onClick = {
+                        onConnectRemoteEmacs(emacsUrl.trim())
+                        onDone()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Connect & Sync")
+                }
+            }
         }
         Box(
             Modifier

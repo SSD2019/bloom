@@ -2,4 +2,5 @@
 <!-- Paths AttachmentFileProvider may serve: only the camera temp folder in the app cache. -->
 <paths>
     <cache-path name="attach_camera" path="attach-camera/" />
+    <cache-path name="remote_attach" path="remote-attach/" />
 </paths>
