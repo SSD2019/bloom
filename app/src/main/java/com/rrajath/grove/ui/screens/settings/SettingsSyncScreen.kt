@@ -104,7 +104,7 @@ fun SettingsSyncScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Load emacs/bloom-server.el in Emacs and run M-x bloom-server-start.",
+                        "Load bloom-server.el in Emacs and run M-x bloom-server-start.",
                         fontFamily = PlexSans, fontSize = 12.sp, color = c.ink2,
                     )
                     Spacer(Modifier.height(10.dp))
