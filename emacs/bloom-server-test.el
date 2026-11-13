@@ -74,5 +74,12 @@
     (should (equal (bloom-server--serialize-saved-tags)
                    ["work" "home" "urgent" "reading"]))))
 
+(ert-deftest bloom-server-test-whitelisted-hosts ()
+  (let ((bloom-server-allowed-hosts '("127.0.0.1" "10.0.0.2")))
+    (should (bloom-server--host-allowed-p "127.0.0.1"))
+    (should (bloom-server--host-allowed-p "10.0.0.2"))
+    (should-not (bloom-server--host-allowed-p "10.0.0.3"))
+    (should-not (bloom-server--host-allowed-p nil))))
+
 (provide 'bloom-server-test)
 ;;; bloom-server-test.el ends here

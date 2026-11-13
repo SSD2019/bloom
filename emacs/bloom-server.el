@@ -48,6 +48,13 @@ When nil, `org-directory' is used."
   :type '(choice (const :tag "Use org-directory" nil) directory)
   :group 'bloom-server)
 
+(defcustom bloom-server-allowed-hosts '("127.0.0.1")
+  "List of whitelisted client IP addresses or hostnames allowed to connect.
+Connections from any peer not matching this list are immediately closed.
+For WireGuard, add your phone's WireGuard IP, e.g. `'(\"127.0.0.1\" \"10.0.0.2\")'."
+  :type '(repeat string)
+  :group 'bloom-server)
+
 (defvar bloom-server--process nil
   "The active network server process, or nil when stopped.")
 
@@ -666,6 +673,31 @@ Signals an error if REL-PATH attempts path traversal outside the root."
 (defun bloom-server--accept-sentinel (_proc _event)
   "Unused accept sentinel.")
 
+(defun bloom-server--peer-ip (client)
+  "Return the remote IP string (without port) for CLIENT process."
+  (let ((remote (process-contact client :remote)))
+    (when remote
+      (format-network-address remote t))))
+
+(defun bloom-server--resolve-allowed-ips ()
+  "Expand `bloom-server-allowed-hosts' into a list of IP strings."
+  (let ((ips '()))
+    (dolist (entry bloom-server-allowed-hosts)
+      (when (stringp entry)
+        (let ((trimmed (string-trim entry)))
+          (unless (string-empty-p trimmed)
+            (push trimmed ips)
+            (when (fboundp 'network-lookup-address-info)
+              (dolist (addr (ignore-errors (network-lookup-address-info trimmed)))
+                (let ((ip (ignore-errors (format-network-address addr t))))
+                  (when ip (push ip ips)))))))))
+    (delete-dups ips)))
+
+(defun bloom-server--host-allowed-p (peer-ip)
+  "Return non-nil if PEER-IP is whitelisted in `bloom-server-allowed-hosts'."
+  (and (stringp peer-ip)
+       (member peer-ip (bloom-server--resolve-allowed-ips))))
+
 ;;;###autoload
 (defun bloom-server-start (&optional port host)
   "Start the Bloom HTTP server on HOST (default `bloom-server-host') and PORT."
@@ -687,12 +719,17 @@ Signals an error if REL-PATH attempts path traversal outside the root."
            :filter #'bloom-server--filter
            :sentinel #'bloom-server--sentinel
            :log (lambda (_server client _msg)
-                  (let ((buf (generate-new-buffer " *bloom-client*")))
-                    (with-current-buffer buf (set-buffer-multibyte nil))
-                    (set-process-buffer client buf)
-                    (set-process-coding-system client 'binary 'binary)
-                    (set-process-filter client #'bloom-server--filter)
-                    (set-process-sentinel client #'bloom-server--sentinel)))))
+                  (let ((peer-ip (bloom-server--peer-ip client)))
+                    (if (not (bloom-server--host-allowed-p peer-ip))
+                        (progn
+                          (message "Bloom server rejected connection from non-whitelisted host: %s" peer-ip)
+                          (delete-process client))
+                      (let ((buf (generate-new-buffer " *bloom-client*")))
+                        (with-current-buffer buf (set-buffer-multibyte nil))
+                        (set-process-buffer client buf)
+                        (set-process-coding-system client 'binary 'binary)
+                        (set-process-filter client #'bloom-server--filter)
+                        (set-process-sentinel client #'bloom-server--sentinel)))))))
     (message "Bloom server listening on http://%s:%d (root: %s)"
              bind-host bind-port (bloom-server--root-dir))
     bloom-server--process))
