@@ -104,8 +104,8 @@ Results land in `macrobenchmark/build/outputs/connected_android_test_additional_
 
 ### First run
 
-1. Launch Bloom and pick your org folder (any folder reachable through Android's file picker).
-2. Point Syncthing (or any other sync tool) at the same folder to share it with your other machines.
+1. Launch Bloom and pick your org folder (any folder reachable through Android's file picker), **or** choose **Connect to remote Emacs server** to connect directly to an Emacs instance running [bloom-emacs-server](https://github.com/SSD2019/bloom-emacs-server) over WireGuard/VPN.
+2. If using a local folder, point Syncthing (or any other sync tool) at the same folder to share it with your other machines. If using a remote Emacs server, Bloom automatically syncs your `org-todo-keywords`, `org-capture-templates` (with shortcut keys), saved tags, priorities, and archive settings from Emacs.
 3. Capture something.
 
 ## Roadmap
