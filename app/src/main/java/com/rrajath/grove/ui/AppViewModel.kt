@@ -31,6 +31,8 @@ import com.rrajath.grove.settings.ThemeMode
 import com.rrajath.grove.settings.ThemePreference
 import com.rrajath.grove.settings.VaultSource
 import com.rrajath.grove.remote.EmacsClient
+import com.rrajath.grove.remote.EmacsEndpointResolver
+import com.rrajath.grove.remote.VpnHelper
 import com.rrajath.grove.sync.SyncTrigger
 import com.rrajath.grove.ui.newbadge.NewBadgeState
 import com.rrajath.grove.ui.editor.LinkSearchItem
@@ -342,24 +344,97 @@ class AppViewModel(
     fun setEmacsServerUrl(url: String) =
         viewModelScope.launch { settingsRepository.setEmacsServerUrl(url) }
 
-    fun connectRemoteEmacs(url: String) =
-        viewModelScope.launch {
-            settingsRepository.setEmacsServerUrl(url)
-            settingsRepository.setVaultSource(VaultSource.REMOTE_EMACS)
-            sync.requestSync("remote emacs connected")
+    fun invalidateEmacsEndpoint() {
+        app.endpointResolver.invalidate()
+    }
+
+    private val _vpnPromptVisible = MutableStateFlow(false)
+    val vpnPromptVisible: StateFlow<Boolean> = _vpnPromptVisible
+
+    @Volatile
+    private var vpnPromptCheckedThisSession = false
+
+    fun checkStartupVpnPrompt() = viewModelScope.launch(dispatchers.io) {
+        if (vpnPromptCheckedThisSession) return@launch
+        val s = settingsRepository.settings.first()
+        if (!s.onboardingDone) return@launch
+        if (s.vaultSource != VaultSource.REMOTE_EMACS) return@launch
+        if (s.emacsServerUrl.isBlank() || s.emacsFallbackUrl.isBlank()) return@launch
+        if (VpnHelper.isVpnActive(app)) {
+            vpnPromptCheckedThisSession = true
+            return@launch
+        }
+        vpnPromptCheckedThisSession = true
+        val primaryReachable = EmacsEndpointResolver.defaultProbe(s.emacsServerUrl)
+        if (primaryReachable || VpnHelper.isVpnActive(app)) return@launch
+
+        if (s.wireguardTunnelName.isNotBlank() && VpnHelper.hasControlTunnelsPermission(app)) {
+            val connected = VpnHelper.connectTunnelAndProbe(
+                context = app,
+                tunnelName = s.wireguardTunnelName,
+            ) {
+                EmacsEndpointResolver.defaultProbe(s.emacsFallbackUrl)
+            }
+            if (connected) {
+                app.endpointResolver.resolve(forceReprobe = true)
+                sync.requestSync("wireguard auto-connected")
+                return@launch
+            }
+        }
+        if (s.promptVpnOnUnreachable) {
+            _vpnPromptVisible.value = true
+        }
+    }
+
+    fun dismissVpnPrompt() {
+        _vpnPromptVisible.value = false
+    }
+
+    fun setPromptVpnOnUnreachable(enabled: Boolean) =
+        viewModelScope.launch { settingsRepository.setPromptVpnOnUnreachable(enabled) }
+
+    fun setWireguardTunnelName(name: String) =
+        viewModelScope.launch { settingsRepository.setWireguardTunnelName(name) }
+
+    fun setWireguardAutoDisconnect(enabled: Boolean) =
+        viewModelScope.launch { settingsRepository.setWireguardAutoDisconnect(enabled) }
+
+    fun connectRemoteEmacs(
+        primaryUrl: String,
+        fallbackUrl: String = "",
+        wireguardTunnelName: String = "",
+    ) = viewModelScope.launch {
+        settingsRepository.setEmacsServerUrl(primaryUrl)
+        settingsRepository.setEmacsFallbackUrl(fallbackUrl)
+        settingsRepository.setWireguardTunnelName(wireguardTunnelName)
+        settingsRepository.setVaultSource(VaultSource.REMOTE_EMACS)
+        app.endpointResolver.invalidate()
+        sync.requestSync("remote emacs connected")
+    }
+
+    suspend fun testEmacsConnection(primaryUrl: String, fallbackUrl: String = ""): Result<String> {
+        val primary = primaryUrl.trim()
+        val fallback = fallbackUrl.trim()
+        if (primary.isEmpty() && fallback.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Enter a server URL"))
         }
 
-    suspend fun testEmacsConnection(url: String): Result<String> {
-        val trimmed = url.trim()
-        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("Enter a server URL"))
-        return try {
+        suspend fun probeOne(label: String, url: String): Pair<Boolean, String> = try {
             val start = System.currentTimeMillis()
-            val ping = EmacsClient(baseUrlProvider = { trimmed }).ping()
+            val ping = EmacsClient(baseUrlProvider = { url }).ping()
             val elapsed = System.currentTimeMillis() - start
-            Result.success("Connected (${ping.orgDirectory}, ${elapsed}ms)")
+            true to "$label: Connected (${ping.orgDirectory}, ${elapsed}ms)"
         } catch (e: Exception) {
-            Result.failure(e)
+            false to "$label: ${e.message ?: "Connection failed"}"
         }
+
+        val results = buildList {
+            if (primary.isNotEmpty()) add(probeOne("Primary", primary))
+            if (fallback.isNotEmpty()) add(probeOne("Fallback", fallback))
+        }
+        val anyOk = results.any { it.first }
+        val summary = results.joinToString("\n") { it.second }
+        return if (anyOk) Result.success(summary) else Result.failure(IllegalStateException(summary))
     }
 
     fun requestSyncNow() {

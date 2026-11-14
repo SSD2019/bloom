@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.text.format.DateFormat
 import androidx.core.net.toUri
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import coil3.ImageLoader
@@ -22,7 +23,9 @@ import com.rrajath.grove.data.PendingCaptureDatabase
 import com.rrajath.grove.data.RoomNoteIndex
 import com.rrajath.grove.remote.EmacsClient
 import com.rrajath.grove.remote.EmacsConfigMapper
+import com.rrajath.grove.remote.EmacsEndpointResolver
 import com.rrajath.grove.remote.EmacsUnreachableException
+import com.rrajath.grove.remote.VpnHelper
 import com.rrajath.grove.settings.VaultSource
 import com.rrajath.grove.vault.RemoteFileStore
 import com.rrajath.grove.icon.AppIconManager
@@ -200,10 +203,28 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
     private val widgetRefreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-    private val emacsUrlState = MutableStateFlow("")
+    private val emacsPrimaryUrlState = MutableStateFlow("")
+    private val emacsFallbackUrlState = MutableStateFlow("")
+
+    @Volatile
+    private var tunnelBroughtUpForSync: String? = null
+
+    val endpointResolver: EmacsEndpointResolver by lazy {
+        EmacsEndpointResolver(
+            primaryUrlProvider = { emacsPrimaryUrlState.value },
+            fallbackUrlProvider = { emacsFallbackUrlState.value },
+        )
+    }
 
     val emacsClient: EmacsClient by lazy {
-        EmacsClient(baseUrlProvider = { emacsUrlState.value })
+        EmacsClient(
+            baseUrlProvider = { endpointResolver.currentOrDefault() },
+            onUnreachable = {
+                val previous = endpointResolver.currentOrDefault()
+                val resolved = endpointResolver.resolve(forceReprobe = true)
+                resolved.reachable && resolved.url != previous
+            },
+        )
     }
 
     val pendingCaptureDatabase: PendingCaptureDatabase by lazy {
@@ -238,11 +259,45 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                     reminderReconciler.catchUpOverdue()
                 }
                 widgetRefreshRequests.tryEmit(Unit)
+                val tunnelToDisconnect = tunnelBroughtUpForSync
+                tunnelBroughtUpForSync = null
+                if (tunnelToDisconnect != null) {
+                    val autoDisconnect = settingsRepository.settings.first().wireguardAutoDisconnect
+                    val inForeground = ProcessLifecycleOwner.get().lifecycle.currentState
+                        .isAtLeast(Lifecycle.State.STARTED)
+                    if (autoDisconnect && !inForeground) {
+                        VpnHelper.setTunnelDown(this, tunnelToDisconnect)
+                    }
+                }
             },
             onBeforeSync = { log ->
                 val settings = settingsRepository.settings.first()
                 if (settings.isEmacsManaged) {
-                    emacsUrlState.value = settings.emacsServerUrl
+                    emacsPrimaryUrlState.value = settings.emacsServerUrl
+                    emacsFallbackUrlState.value = settings.emacsFallbackUrl
+                    var resolved = endpointResolver.resolve(forceReprobe = true)
+                    if (
+                        !resolved.reachable &&
+                        settings.wireguardTunnelName.isNotBlank() &&
+                        settings.emacsFallbackUrl.isNotBlank() &&
+                        !VpnHelper.isVpnActive(this) &&
+                        VpnHelper.hasControlTunnelsPermission(this)
+                    ) {
+                        log("primary unreachable; bringing up WireGuard tunnel '${settings.wireguardTunnelName}'")
+                        val connected = VpnHelper.connectTunnelAndProbe(
+                            context = this,
+                            tunnelName = settings.wireguardTunnelName,
+                        ) {
+                            EmacsEndpointResolver.defaultProbe(settings.emacsFallbackUrl)
+                        }
+                        if (connected) {
+                            tunnelBroughtUpForSync = settings.wireguardTunnelName
+                            resolved = endpointResolver.resolve(forceReprobe = true)
+                        }
+                    }
+                    if (resolved.usedFallback) {
+                        log("using fallback Emacs endpoint (${resolved.url})")
+                    }
                     try {
                         val config = emacsClient.getConfig()
                         settingsRepository.applyEmacsConfig(config)
@@ -279,13 +334,20 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
         val source: VaultSource,
         val uriString: String?,
         val emacsUrl: String,
+        val emacsFallbackUrl: String,
         val ignoreList: String,
     )
 
     val fileStore: StateFlow<FileStore?> by lazy {
         combine(
             settingsRepository.settings.map {
-                VaultStoreSettings(it.vaultSource, it.vaultTreeUri, it.emacsServerUrl, it.ignoreList)
+                VaultStoreSettings(
+                    it.vaultSource,
+                    it.vaultTreeUri,
+                    it.emacsServerUrl,
+                    it.emacsFallbackUrl,
+                    it.ignoreList,
+                )
             }.distinctUntilChanged(),
             TestVaultHook.root,
             // Like the ignore list, a new config builds a new store: fresh listing caches, and
@@ -293,13 +355,16 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
             // Null until settings load, so a store never exists under a stand-in config.
             attachConfigSource.config,
         ) { settings, testRoot, attachConfig ->
-            emacsUrlState.value = settings.emacsUrl
+            emacsPrimaryUrlState.value = settings.emacsUrl
+            emacsFallbackUrlState.value = settings.emacsFallbackUrl
+            endpointResolver.invalidate()
             val ignore = IgnorePatterns(settings.ignoreList)
             val attachRoots = attachConfig?.let { com.rrajath.grove.attach.AttachSkipRoots.of(it) }
             when {
                 attachRoots == null -> null
                 testRoot != null -> JvmFileStore(testRoot, ignore, attachRoots = attachRoots)
-                settings.source == VaultSource.REMOTE_EMACS && settings.emacsUrl.isNotBlank() ->
+                settings.source == VaultSource.REMOTE_EMACS &&
+                    (settings.emacsUrl.isNotBlank() || settings.emacsFallbackUrl.isNotBlank()) ->
                     RemoteFileStore(this, emacsClient)
                 settings.uriString != null -> SafFileStore(this, settings.uriString.toUri(), ignore, attachRoots = attachRoots)
                 else -> null

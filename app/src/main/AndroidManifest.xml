@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Fetch the page title for shared URLs so notes read better than a bare link. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Check whether a VPN transport is active when falling back from LAN to WireGuard. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Optional: allow remote-controlling a configured WireGuard tunnel for background/launch sync. -->
+    <uses-permission android:name="com.wireguard.android.permission.CONTROL_TUNNELS" />
     <!-- SCHEDULED/DEADLINE reminder notifications (see the `reminders` package). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -12,6 +16,7 @@
     <!-- API 30+ package visibility: lets "Open with" tell whether any app can
          view an attachment before launching the chooser. -->
     <queries>
+        <package android:name="com.wireguard.android" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="*/*" />

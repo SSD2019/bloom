@@ -108,6 +108,10 @@ data class GroveSettings(
     val vaultTreeUri: String? = null,
     val vaultSource: VaultSource = VaultSource.LOCAL_SAF,
     val emacsServerUrl: String = "",
+    val emacsFallbackUrl: String = "",
+    val promptVpnOnUnreachable: Boolean = true,
+    val wireguardTunnelName: String = "",
+    val wireguardAutoDisconnect: Boolean = true,
     val emacsSavedTags: Set<String> = emptySet(),
     val syncMode: SyncMode = SyncMode.ON_OPEN_CLOSE,
     val periodicSyncMinutes: Int = 30,
@@ -328,11 +332,11 @@ data class GroveSettings(
     val isVaultConfigured: Boolean
         get() = when (vaultSource) {
             VaultSource.LOCAL_SAF -> vaultTreeUri != null
-            VaultSource.REMOTE_EMACS -> emacsServerUrl.isNotBlank()
+            VaultSource.REMOTE_EMACS -> emacsServerUrl.isNotBlank() || emacsFallbackUrl.isNotBlank()
         }
 
     val isEmacsManaged: Boolean
-        get() = vaultSource == VaultSource.REMOTE_EMACS && emacsServerUrl.isNotBlank()
+        get() = vaultSource == VaultSource.REMOTE_EMACS && (emacsServerUrl.isNotBlank() || emacsFallbackUrl.isNotBlank())
 
     companion object {
         const val DEFAULT_TODO_KEYWORDS = "TODO IN-PROGRESS | DONE CANCELLED"
@@ -376,6 +380,10 @@ class SettingsRepository(
         val vaultTreeUri = stringPreferencesKey("vault_tree_uri")
         val vaultSource = stringPreferencesKey("vault_source")
         val emacsServerUrl = stringPreferencesKey("emacs_server_url")
+        val emacsFallbackUrl = stringPreferencesKey("emacs_fallback_url")
+        val promptVpnOnUnreachable = booleanPreferencesKey("prompt_vpn_on_unreachable")
+        val wireguardTunnelName = stringPreferencesKey("wireguard_tunnel_name")
+        val wireguardAutoDisconnect = booleanPreferencesKey("wireguard_auto_disconnect")
         val emacsSavedTags = stringPreferencesKey("emacs_saved_tags")
         val syncMode = stringPreferencesKey("sync_mode")
         val periodicSyncMinutes = intPreferencesKey("periodic_sync_minutes")
@@ -504,6 +512,10 @@ class SettingsRepository(
             vaultTreeUri = prefs[Keys.vaultTreeUri],
             vaultSource = VaultSource.fromStorage(prefs[Keys.vaultSource]),
             emacsServerUrl = prefs[Keys.emacsServerUrl] ?: "",
+            emacsFallbackUrl = prefs[Keys.emacsFallbackUrl] ?: "",
+            promptVpnOnUnreachable = prefs[Keys.promptVpnOnUnreachable] ?: true,
+            wireguardTunnelName = prefs[Keys.wireguardTunnelName] ?: "",
+            wireguardAutoDisconnect = prefs[Keys.wireguardAutoDisconnect] ?: true,
             emacsSavedTags = decodeStringSet(prefs[Keys.emacsSavedTags]),
             syncMode = SyncMode.fromStorage(prefs[Keys.syncMode]),
             periodicSyncMinutes = prefs[Keys.periodicSyncMinutes] ?: 30,
@@ -865,6 +877,22 @@ class SettingsRepository(
 
     suspend fun setEmacsServerUrl(url: String) {
         editSettings { it[Keys.emacsServerUrl] = url.trim() }
+    }
+
+    suspend fun setEmacsFallbackUrl(url: String) {
+        editSettings { it[Keys.emacsFallbackUrl] = url.trim() }
+    }
+
+    suspend fun setPromptVpnOnUnreachable(enabled: Boolean) {
+        editSettings { it[Keys.promptVpnOnUnreachable] = enabled }
+    }
+
+    suspend fun setWireguardTunnelName(name: String) {
+        editSettings { it[Keys.wireguardTunnelName] = name.trim() }
+    }
+
+    suspend fun setWireguardAutoDisconnect(enabled: Boolean) {
+        editSettings { it[Keys.wireguardAutoDisconnect] = enabled }
     }
 
     suspend fun applyEmacsConfig(config: com.rrajath.grove.remote.EmacsConfigDto) {

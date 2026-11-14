@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rrajath.grove.remote.VpnHelper
 import com.rrajath.grove.settings.GroveSettings
 import com.rrajath.grove.settings.SyncMode
 import com.rrajath.grove.settings.VaultSource
@@ -46,8 +47,10 @@ fun SettingsSyncScreen(
     onOpenSyncLog: () -> Unit,
     onSetVaultUri: (String) -> Unit,
     onSetVaultSource: (VaultSource) -> Unit = {},
-    onConnectRemoteEmacs: (String) -> Unit = {},
-    onTestEmacsConnection: suspend (String) -> Result<String> = { Result.failure(UnsupportedOperationException()) },
+    onConnectRemoteEmacs: (String, String, String) -> Unit = { _, _, _ -> },
+    onTestEmacsConnection: suspend (String, String) -> Result<String> = { _, _ -> Result.failure(UnsupportedOperationException()) },
+    onSetPromptVpnOnUnreachable: (Boolean) -> Unit = {},
+    onSetWireguardAutoDisconnect: (Boolean) -> Unit = {},
     onSyncNow: () -> Unit = {},
     pendingCaptureCount: Int = 0,
 ) {
@@ -55,8 +58,17 @@ fun SettingsSyncScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var emacsUrlDraft by remember(settings.emacsServerUrl) { mutableStateOf(settings.emacsServerUrl) }
+    var emacsFallbackDraft by remember(settings.emacsFallbackUrl) { mutableStateOf(settings.emacsFallbackUrl) }
+    var wireguardTunnelDraft by remember(settings.wireguardTunnelName) { mutableStateOf(settings.wireguardTunnelName) }
+    var hasTunnelPermission by remember { mutableStateOf(VpnHelper.hasControlTunnelsPermission(context)) }
     var testStatus by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var testing by remember { mutableStateOf(false) }
+
+    val tunnelPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasTunnelPermission = granted || VpnHelper.hasControlTunnelsPermission(context)
+    }
 
     val folderPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
@@ -98,7 +110,7 @@ fun SettingsSyncScreen(
             } else {
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 12.dp)) {
                     Text(
-                        "Remote Emacs server (WireGuard)",
+                        "Remote Emacs server",
                         fontFamily = PlexSans, fontWeight = FontWeight.Medium,
                         fontSize = 14.5.sp, color = c.ink,
                     )
@@ -114,22 +126,35 @@ fun SettingsSyncScreen(
                             emacsUrlDraft = it
                             testStatus = null
                         },
-                        label = { Text("Server URL") },
+                        label = { Text("Server URL (Primary)") },
+                        placeholder = { Text("http://192.168.1.50:8765") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = emacsFallbackDraft,
+                        onValueChange = {
+                            emacsFallbackDraft = it
+                            testStatus = null
+                        },
+                        label = { Text("Fallback URL (optional)") },
                         placeholder = { Text("http://10.0.0.1:8765") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(10.dp))
+                    val anyUrlEntered = emacsUrlDraft.isNotBlank() || emacsFallbackDraft.isNotBlank()
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OutlinedButton(
-                            enabled = !testing && emacsUrlDraft.isNotBlank(),
+                            enabled = !testing && anyUrlEntered,
                             onClick = {
                                 testing = true
                                 scope.launch {
-                                    val res = onTestEmacsConnection(emacsUrlDraft)
+                                    val res = onTestEmacsConnection(emacsUrlDraft, emacsFallbackDraft)
                                     testStatus = res.fold(
                                         onSuccess = { true to it },
                                         onFailure = { false to (it.message ?: "Connection failed") },
@@ -142,8 +167,10 @@ fun SettingsSyncScreen(
                             Text(if (testing) "Testing…" else "Test Connection")
                         }
                         Button(
-                            enabled = emacsUrlDraft.isNotBlank(),
-                            onClick = { onConnectRemoteEmacs(emacsUrlDraft) },
+                            enabled = anyUrlEntered,
+                            onClick = {
+                                onConnectRemoteEmacs(emacsUrlDraft, emacsFallbackDraft, wireguardTunnelDraft)
+                            },
                             modifier = Modifier.weight(1f),
                         ) {
                             Text("Save & Sync")
@@ -165,6 +192,53 @@ fun SettingsSyncScreen(
                             fontFamily = PlexSans,
                             fontSize = 12.5.sp,
                             color = c.accent,
+                        )
+                    }
+                }
+                if (emacsFallbackDraft.isNotBlank() || settings.emacsFallbackUrl.isNotBlank()) {
+                    RowDivider()
+                    ToggleRow(
+                        label = "Prompt for WireGuard on launch",
+                        checked = settings.promptVpnOnUnreachable,
+                        description = "Ask to open WireGuard when the primary URL is unreachable and no VPN is active.",
+                        onToggle = onSetPromptVpnOnUnreachable,
+                    )
+                    RowDivider()
+                    Column(Modifier.padding(horizontal = 15.dp, vertical = 12.dp)) {
+                        OutlinedTextField(
+                            value = wireguardTunnelDraft,
+                            onValueChange = { wireguardTunnelDraft = it },
+                            label = { Text("WireGuard tunnel name (optional)") },
+                            placeholder = { Text("home") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Auto-connects this tunnel on launch & periodic sync when primary is unreachable. Requires \"Allow remote control apps\" in WireGuard.",
+                            fontFamily = PlexSans,
+                            fontSize = 11.5.sp,
+                            color = c.ink2,
+                        )
+                        if (wireguardTunnelDraft.isNotBlank() && !hasTunnelPermission) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    tunnelPermissionLauncher.launch(VpnHelper.PERMISSION_CONTROL_TUNNELS)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Grant WireGuard tunnel permission")
+                            }
+                        }
+                    }
+                    if (wireguardTunnelDraft.isNotBlank()) {
+                        RowDivider()
+                        ToggleRow(
+                            label = "Disconnect tunnel after sync",
+                            checked = settings.wireguardAutoDisconnect,
+                            description = "Turn the tunnel off after background sync if this app brought it up.",
+                            onToggle = onSetWireguardAutoDisconnect,
                         )
                     }
                 }

@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
 class EmacsClient(
     private val baseUrlProvider: () -> String,
     private val http: OkHttpClient = defaultHttpClient(),
+    private val onUnreachable: (suspend () -> Boolean)? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -53,15 +54,20 @@ class EmacsClient(
         getJson(listOf("v1", "file"), mapOf("path" to path))
 
     suspend fun writeFile(path: String, content: String): EmacsFileEntryDto = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "file"), mapOf("path" to path))
         val body = content.toRequestBody(TEXT_UTF8)
-        executeJson(Request.Builder().url(url).put(body).build())
+        executeJsonWithRetry {
+            val url = buildUrl(listOf("v1", "file"), mapOf("path" to path))
+            Request.Builder().url(url).put(body).build()
+        }
     }
 
     suspend fun createFile(path: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "file", "create"), mapOf("path" to path))
-        val req = Request.Builder().url(url).post("".toRequestBody(null)).build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "file", "create"), mapOf("path" to path))
+                Request.Builder().url(url).post("".toRequestBody(null)).build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200, 201 -> true
                 409 -> false
@@ -71,10 +77,13 @@ class EmacsClient(
     }
 
     suspend fun renameFile(oldPath: String, newPath: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "file", "rename"))
         val payload = json.encodeToString(RenameRequestDto(oldPath, newPath)).toRequestBody(JSON_MEDIA)
-        val req = Request.Builder().url(url).post(payload).build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "file", "rename"))
+                Request.Builder().url(url).post(payload).build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404, 409 -> false
@@ -84,9 +93,12 @@ class EmacsClient(
     }
 
     suspend fun deleteFile(path: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "file"), mapOf("path" to path))
-        val req = Request.Builder().url(url).delete().build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "file"), mapOf("path" to path))
+                Request.Builder().url(url).delete().build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404 -> false
@@ -107,9 +119,12 @@ class EmacsClient(
         getJson(listOf("v1", "raw", "list"), mapOf("dir" to dir))
 
     suspend fun downloadRaw(path: String): ByteArray = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
-        val req = Request.Builder().url(url).get().build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
+                Request.Builder().url(url).get().build()
+            },
+        ) { resp ->
             if (resp.isSuccessful) {
                 resp.body?.bytes() ?: ByteArray(0)
             } else {
@@ -119,16 +134,20 @@ class EmacsClient(
     }
 
     suspend fun uploadRaw(path: String, bytes: ByteArray): EmacsFileEntryDto = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
-        val req = Request.Builder().url(url).put(bytes.toRequestBody(OCTET_STREAM)).build()
-        executeJson(req)
+        executeJsonWithRetry {
+            val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
+            Request.Builder().url(url).put(bytes.toRequestBody(OCTET_STREAM)).build()
+        }
     }
 
     suspend fun renameRaw(path: String, newLeaf: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "rename"))
         val payload = json.encodeToString(RawRenameRequestDto(path, newLeaf)).toRequestBody(JSON_MEDIA)
-        val req = Request.Builder().url(url).post(payload).build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "raw", "rename"))
+                Request.Builder().url(url).post(payload).build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404, 409 -> false
@@ -138,9 +157,12 @@ class EmacsClient(
     }
 
     suspend fun deleteRaw(path: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
-        val req = Request.Builder().url(url).delete().build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "raw", "file"), mapOf("path" to path))
+                Request.Builder().url(url).delete().build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404 -> false
@@ -150,9 +172,12 @@ class EmacsClient(
     }
 
     suspend fun deleteDir(dir: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "dir"), mapOf("dir" to dir))
-        val req = Request.Builder().url(url).delete().build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "raw", "dir"), mapOf("dir" to dir))
+                Request.Builder().url(url).delete().build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404 -> false
@@ -162,10 +187,13 @@ class EmacsClient(
     }
 
     suspend fun moveDir(src: String, dstParent: String): Boolean = withContext(Dispatchers.IO) {
-        val url = buildUrl(listOf("v1", "raw", "move-dir"))
         val payload = json.encodeToString(RawMoveDirRequestDto(src, dstParent)).toRequestBody(JSON_MEDIA)
-        val req = Request.Builder().url(url).post(payload).build()
-        executeRaw(req) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(listOf("v1", "raw", "move-dir"))
+                Request.Builder().url(url).post(payload).build()
+            },
+        ) { resp ->
             when (resp.code) {
                 200 -> true
                 404, 409 -> false
@@ -178,16 +206,22 @@ class EmacsClient(
         segments: List<String>,
         query: Map<String, String> = emptyMap(),
     ): T = withContext(Dispatchers.IO) {
-        val url = buildUrl(segments, query)
-        executeJson(Request.Builder().url(url).get().build())
+        executeJsonWithRetry {
+            val url = buildUrl(segments, query)
+            Request.Builder().url(url).get().build()
+        }
     }
 
     private suspend inline fun <reified T> getJsonOrNull(
         segments: List<String>,
         query: Map<String, String> = emptyMap(),
     ): T? = withContext(Dispatchers.IO) {
-        val url = buildUrl(segments, query)
-        executeRaw(Request.Builder().url(url).get().build()) { resp ->
+        executeRawWithRetry(
+            requestFactory = {
+                val url = buildUrl(segments, query)
+                Request.Builder().url(url).get().build()
+            },
+        ) { resp ->
             when {
                 resp.code == 404 -> null
                 resp.isSuccessful -> json.decodeFromString<T>(resp.body?.string().orEmpty())
@@ -196,12 +230,27 @@ class EmacsClient(
         }
     }
 
-    private inline fun <reified T> executeJson(request: Request): T =
-        executeRaw(request) { resp ->
-            val bodyStr = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw EmacsServerException(resp.code, bodyStr)
-            json.decodeFromString(bodyStr)
+    private suspend inline fun <reified T> executeJsonWithRetry(
+        crossinline requestFactory: () -> Request,
+    ): T = executeRawWithRetry(requestFactory) { resp ->
+        val bodyStr = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw EmacsServerException(resp.code, bodyStr)
+        json.decodeFromString(bodyStr)
+    }
+
+    private suspend inline fun <T> executeRawWithRetry(
+        crossinline requestFactory: () -> Request,
+        crossinline block: (okhttp3.Response) -> T,
+    ): T {
+        return try {
+            executeRaw(requestFactory(), block)
+        } catch (e: EmacsUnreachableException) {
+            val switched = onUnreachable?.invoke() == true
+            if (!switched) throw e
+            http.connectionPool.evictAll()
+            executeRaw(requestFactory(), block)
         }
+    }
 
     private inline fun <T> executeRaw(request: Request, block: (okhttp3.Response) -> T): T {
         val resp = try {

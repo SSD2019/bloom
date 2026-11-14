@@ -1043,6 +1043,8 @@ private fun GroveNavigation(
                     onSetVaultSource = viewModel::setVaultSource,
                     onConnectRemoteEmacs = viewModel::connectRemoteEmacs,
                     onTestEmacsConnection = viewModel::testEmacsConnection,
+                    onSetPromptVpnOnUnreachable = viewModel::setPromptVpnOnUnreachable,
+                    onSetWireguardAutoDisconnect = viewModel::setWireguardAutoDisconnect,
                     onSyncNow = viewModel::requestSyncNow,
                     pendingCaptureCount = pendingCount,
                 )
@@ -1247,10 +1249,15 @@ private fun GroveNavigation(
     // One-time exact-alarm prompt: checked on every resume, and again once onboarding
     // finishes or What's New closes, so it queues behind those instead of stacking.
     androidx.lifecycle.compose.LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.invalidateEmacsEndpoint()
         viewModel.checkExactAlarmPrompt()
+        viewModel.checkStartupVpnPrompt()
     }
     LaunchedEffect(settings.onboardingDone, whatsNew.isEmpty()) {
-        if (whatsNew.isEmpty()) viewModel.checkExactAlarmPrompt()
+        if (whatsNew.isEmpty()) {
+            viewModel.checkExactAlarmPrompt()
+            viewModel.checkStartupVpnPrompt()
+        }
     }
     val exactAlarmPrompt by viewModel.exactAlarmPrompt.collectAsStateWithLifecycle()
     if (exactAlarmPrompt && whatsNew.isEmpty()) {
@@ -1261,6 +1268,35 @@ private fun GroveNavigation(
                 ReminderAccessIntents.openExactAlarmSettings(context)
             },
             onNotNow = viewModel::onExactAlarmPromptNotNow,
+        )
+    }
+
+    val vpnPromptVisible by viewModel.vpnPromptVisible.collectAsStateWithLifecycle()
+    if (vpnPromptVisible && whatsNew.isEmpty() && !exactAlarmPrompt) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissVpnPrompt,
+            title = { androidx.compose.material3.Text("Primary server unreachable") },
+            text = {
+                androidx.compose.material3.Text(
+                    "Couldn't reach the primary Emacs server. Enable WireGuard VPN to connect via the fallback address?",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        viewModel.dismissVpnPrompt()
+                        com.rrajath.grove.remote.VpnHelper.openWireGuardOrVpnSettings(context)
+                    },
+                ) {
+                    androidx.compose.material3.Text("Open WireGuard")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = viewModel::dismissVpnPrompt) {
+                    androidx.compose.material3.Text("Dismiss")
+                }
+            },
         )
     }
 }
