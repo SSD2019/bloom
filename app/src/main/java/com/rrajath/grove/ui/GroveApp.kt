@@ -1213,6 +1213,24 @@ private fun GroveNavigation(
         // AppViewModel (not a route-scoped ViewModel) owns this state -- see
         // AppViewModel.captureSavedSnack.
         val captureSavedSnack by viewModel.captureSavedSnack.collectAsStateWithLifecycle()
+        val emacsEndpointStatus by viewModel.emacsEndpointStatus.collectAsStateWithLifecycle()
+        val pendingCaptureCount by viewModel.pendingCaptureCount.collectAsStateWithLifecycle()
+        GroveActionSnackbar(
+            visible = settings.isEmacsManaged &&
+                emacsEndpointStatus == com.rrajath.grove.remote.EmacsEndpointResolver.EndpointStatus.OFFLINE &&
+                captureSavedSnack == null,
+            message = if (pendingCaptureCount > 0) {
+                "Offline · $pendingCaptureCount capture(s) queued"
+            } else {
+                "Offline · Emacs server unreachable"
+            },
+            actionLabel = "Retry",
+            onAction = viewModel::retryEmacsConnection,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 14.dp),
+        )
         GroveActionSnackbar(
             visible = captureSavedSnack != null,
             message = "Saved \"${captureSavedSnack?.filePath?.substringAfterLast('/').orEmpty()}\"",

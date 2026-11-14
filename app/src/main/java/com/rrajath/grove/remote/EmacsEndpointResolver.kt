@@ -1,5 +1,7 @@
 package com.rrajath.grove.remote
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
@@ -14,6 +16,13 @@ class EmacsEndpointResolver(
     private val fallbackUrlProvider: () -> String,
     private val probe: suspend (String) -> Boolean = { url -> defaultProbe(url) },
 ) {
+    enum class EndpointStatus {
+        UNKNOWN,
+        ONLINE_PRIMARY,
+        ONLINE_FALLBACK,
+        OFFLINE,
+    }
+
     data class ResolveResult(
         val url: String,
         val reachable: Boolean,
@@ -21,6 +30,8 @@ class EmacsEndpointResolver(
     )
 
     private val mutex = Mutex()
+    private val _status = MutableStateFlow(EndpointStatus.UNKNOWN)
+    val status: StateFlow<EndpointStatus> = _status
 
     @Volatile
     private var cachedUrl: String? = null
@@ -39,6 +50,21 @@ class EmacsEndpointResolver(
     /** Clears the session cache so the next [resolve] probes primary then fallback. */
     fun invalidate() {
         cachedUrl = null
+    }
+
+    fun markOnline(url: String) {
+        val fallback = fallbackUrlProvider().trim()
+        val primary = primaryUrlProvider().trim()
+        _status.value = if (url == fallback && fallback != primary) {
+            EndpointStatus.ONLINE_FALLBACK
+        } else {
+            EndpointStatus.ONLINE_PRIMARY
+        }
+    }
+
+    fun markOffline() {
+        cachedUrl = null
+        _status.value = EndpointStatus.OFFLINE
     }
 
     /**
@@ -76,14 +102,17 @@ class EmacsEndpointResolver(
 
             if (p.isNotBlank() && probe(p)) {
                 cachedUrl = p
+                _status.value = EndpointStatus.ONLINE_PRIMARY
                 return@withLock ResolveResult(url = p, reachable = true, usedFallback = false)
             }
             if (f.isNotBlank() && f != p && probe(f)) {
                 cachedUrl = f
+                _status.value = EndpointStatus.ONLINE_FALLBACK
                 return@withLock ResolveResult(url = f, reachable = true, usedFallback = true)
             }
 
             cachedUrl = null
+            _status.value = EndpointStatus.OFFLINE
             ResolveResult(url = p.ifBlank { f }, reachable = false, usedFallback = false)
         }
     }

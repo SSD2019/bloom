@@ -344,8 +344,37 @@ class AppViewModel(
     fun setEmacsServerUrl(url: String) =
         viewModelScope.launch { settingsRepository.setEmacsServerUrl(url) }
 
+    val emacsEndpointStatus: StateFlow<EmacsEndpointResolver.EndpointStatus> = app.endpointResolver.status
+
     fun invalidateEmacsEndpoint() {
         app.endpointResolver.invalidate()
+    }
+
+    fun retryEmacsConnection() = viewModelScope.launch(dispatchers.io) {
+        val s = settingsRepository.settings.first()
+        if (!s.isEmacsManaged) return@launch
+        var resolved = app.endpointResolver.resolve(forceReprobe = true)
+        if (
+            !resolved.reachable &&
+            s.wireguardTunnelName.isNotBlank() &&
+            s.emacsFallbackUrl.isNotBlank() &&
+            !VpnHelper.isVpnActive(app) &&
+            VpnHelper.hasControlTunnelsPermission(app)
+        ) {
+            val connected = VpnHelper.connectTunnelAndProbe(
+                context = app,
+                tunnelName = s.wireguardTunnelName,
+            ) {
+                EmacsEndpointResolver.defaultProbe(s.emacsFallbackUrl)
+            }
+            if (connected) {
+                app.bloomManagedTunnel = s.wireguardTunnelName
+                resolved = app.endpointResolver.resolve(forceReprobe = true)
+            }
+        }
+        if (resolved.reachable) {
+            sync.requestSync("manual retry")
+        }
     }
 
     private val _vpnPromptVisible = MutableStateFlow(false)

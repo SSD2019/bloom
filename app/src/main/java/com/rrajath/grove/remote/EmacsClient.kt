@@ -20,6 +20,7 @@ class EmacsClient(
     private val baseUrlProvider: () -> String,
     private val http: OkHttpClient = defaultHttpClient(),
     private val onUnreachable: (suspend () -> Boolean)? = null,
+    private val onReachable: (() -> Unit)? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -258,6 +259,7 @@ class EmacsClient(
         } catch (e: IOException) {
             throw EmacsUnreachableException("Cannot reach Emacs server at ${request.url}: ${e.message}", e)
         }
+        onReachable?.invoke()
         return resp.use(block)
     }
 

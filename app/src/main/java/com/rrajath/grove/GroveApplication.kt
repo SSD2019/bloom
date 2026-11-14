@@ -227,6 +227,9 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                 val resolved = endpointResolver.resolve(forceReprobe = true)
                 resolved.reachable && resolved.url != previous
             },
+            onReachable = {
+                endpointResolver.markOnline(endpointResolver.currentOrDefault())
+            },
         )
     }
 
