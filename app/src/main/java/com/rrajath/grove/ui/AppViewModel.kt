@@ -416,12 +416,11 @@ class AppViewModel(
                 app.bloomManagedTunnel = s.wireguardTunnelName
                 app.endpointResolver.resolve(forceReprobe = true)
                 sync.requestSync("wireguard auto-connected")
-                vpnPromptCheckedThisSession = true
-                return@launch
             }
+            vpnPromptCheckedThisSession = true
+            return@launch
         }
         if (!vpnPromptCheckedThisSession && s.promptVpnOnUnreachable) {
-            vpnPromptCheckedThisSession = true
             _vpnPromptVisible.value = true
         }
         vpnPromptCheckedThisSession = true
