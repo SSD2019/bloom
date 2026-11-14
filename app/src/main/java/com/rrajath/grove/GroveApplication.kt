@@ -207,7 +207,10 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
     private val emacsFallbackUrlState = MutableStateFlow("")
 
     @Volatile
-    private var tunnelBroughtUpForSync: String? = null
+    var bloomManagedTunnel: String? = null
+
+    @Volatile
+    var vpnAutoConnectAttemptedInForeground: Boolean = false
 
     val endpointResolver: EmacsEndpointResolver by lazy {
         EmacsEndpointResolver(
@@ -259,14 +262,15 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                     reminderReconciler.catchUpOverdue()
                 }
                 widgetRefreshRequests.tryEmit(Unit)
-                val tunnelToDisconnect = tunnelBroughtUpForSync
-                tunnelBroughtUpForSync = null
+                val tunnelToDisconnect = bloomManagedTunnel
                 if (tunnelToDisconnect != null) {
                     val autoDisconnect = settingsRepository.settings.first().wireguardAutoDisconnect
                     val inForeground = ProcessLifecycleOwner.get().lifecycle.currentState
                         .isAtLeast(Lifecycle.State.STARTED)
                     if (autoDisconnect && !inForeground) {
+                        bloomManagedTunnel = null
                         VpnHelper.setTunnelDown(this, tunnelToDisconnect)
+                        endpointResolver.invalidate()
                     }
                 }
             },
@@ -291,7 +295,7 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                             EmacsEndpointResolver.defaultProbe(settings.emacsFallbackUrl)
                         }
                         if (connected) {
-                            tunnelBroughtUpForSync = settings.wireguardTunnelName
+                            bloomManagedTunnel = settings.wireguardTunnelName
                             resolved = endpointResolver.resolve(forceReprobe = true)
                         }
                     }
@@ -832,8 +836,18 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
             }
 
             override fun onStop(owner: LifecycleOwner) {
+                vpnAutoConnectAttemptedInForeground = false
                 appScope.launch {
-                    syncManager.onAppBackground(settingsRepository.settings.first().syncMode)
+                    val settings = settingsRepository.settings.first()
+                    syncManager.onAppBackground(settings.syncMode)
+                    if (settings.syncMode == com.rrajath.grove.settings.SyncMode.MANUAL && settings.wireguardAutoDisconnect) {
+                        val tunnelToDisconnect = bloomManagedTunnel
+                        if (tunnelToDisconnect != null) {
+                            bloomManagedTunnel = null
+                            VpnHelper.setTunnelDown(this@GroveApplication, tunnelToDisconnect)
+                            endpointResolver.invalidate()
+                        }
+                    }
                 }
             }
         })

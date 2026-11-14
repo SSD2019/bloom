@@ -355,20 +355,28 @@ class AppViewModel(
     private var vpnPromptCheckedThisSession = false
 
     fun checkStartupVpnPrompt() = viewModelScope.launch(dispatchers.io) {
-        if (vpnPromptCheckedThisSession) return@launch
+        val canAutoConnect = !app.vpnAutoConnectAttemptedInForeground
+        if (vpnPromptCheckedThisSession && !canAutoConnect) return@launch
         val s = settingsRepository.settings.first()
         if (!s.onboardingDone) return@launch
         if (s.vaultSource != VaultSource.REMOTE_EMACS) return@launch
         if (s.emacsServerUrl.isBlank() || s.emacsFallbackUrl.isBlank()) return@launch
         if (VpnHelper.isVpnActive(app)) {
+            app.vpnAutoConnectAttemptedInForeground = true
             vpnPromptCheckedThisSession = true
             return@launch
         }
-        vpnPromptCheckedThisSession = true
-        val primaryReachable = EmacsEndpointResolver.defaultProbe(s.emacsServerUrl)
-        if (primaryReachable || VpnHelper.isVpnActive(app)) return@launch
+        val hasTunnel = s.wireguardTunnelName.isNotBlank() && VpnHelper.hasControlTunnelsPermission(app)
+        if (!hasTunnel && vpnPromptCheckedThisSession) return@launch
 
-        if (s.wireguardTunnelName.isNotBlank() && VpnHelper.hasControlTunnelsPermission(app)) {
+        app.vpnAutoConnectAttemptedInForeground = true
+        val primaryReachable = EmacsEndpointResolver.defaultProbe(s.emacsServerUrl)
+        if (primaryReachable || VpnHelper.isVpnActive(app)) {
+            vpnPromptCheckedThisSession = true
+            return@launch
+        }
+
+        if (hasTunnel) {
             val connected = VpnHelper.connectTunnelAndProbe(
                 context = app,
                 tunnelName = s.wireguardTunnelName,
@@ -376,14 +384,18 @@ class AppViewModel(
                 EmacsEndpointResolver.defaultProbe(s.emacsFallbackUrl)
             }
             if (connected) {
+                app.bloomManagedTunnel = s.wireguardTunnelName
                 app.endpointResolver.resolve(forceReprobe = true)
                 sync.requestSync("wireguard auto-connected")
+                vpnPromptCheckedThisSession = true
                 return@launch
             }
         }
-        if (s.promptVpnOnUnreachable) {
+        if (!vpnPromptCheckedThisSession && s.promptVpnOnUnreachable) {
+            vpnPromptCheckedThisSession = true
             _vpnPromptVisible.value = true
         }
+        vpnPromptCheckedThisSession = true
     }
 
     fun dismissVpnPrompt() {
