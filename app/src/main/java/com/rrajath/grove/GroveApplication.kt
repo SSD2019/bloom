@@ -212,6 +212,9 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
     @Volatile
     var vpnAutoConnectAttemptedInForeground: Boolean = false
 
+    @Volatile
+    private var isAppInForeground: Boolean = false
+
     val endpointResolver: EmacsEndpointResolver by lazy {
         EmacsEndpointResolver(
             primaryUrlProvider = { emacsPrimaryUrlState.value },
@@ -268,9 +271,7 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
                 val tunnelToDisconnect = bloomManagedTunnel
                 if (tunnelToDisconnect != null) {
                     val autoDisconnect = settingsRepository.settings.first().wireguardAutoDisconnect
-                    val inForeground = ProcessLifecycleOwner.get().lifecycle.currentState
-                        .isAtLeast(Lifecycle.State.STARTED)
-                    if (autoDisconnect && !inForeground) {
+                    if (autoDisconnect && !isAppInForeground) {
                         bloomManagedTunnel = null
                         VpnHelper.setTunnelDown(this, tunnelToDisconnect)
                         endpointResolver.invalidate()
@@ -825,6 +826,7 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
+                isAppInForeground = true
                 appScope.launch {
                     syncManager.onAppForeground(settingsRepository.settings.first().syncMode)
                 }
@@ -839,6 +841,7 @@ open class GroveApplication : Application(), SingletonImageLoader.Factory {
             }
 
             override fun onStop(owner: LifecycleOwner) {
+                isAppInForeground = false
                 vpnAutoConnectAttemptedInForeground = false
                 appScope.launch {
                     val settings = settingsRepository.settings.first()

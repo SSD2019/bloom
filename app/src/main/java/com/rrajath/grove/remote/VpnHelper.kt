@@ -8,9 +8,12 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
@@ -24,6 +27,8 @@ object VpnHelper {
     private const val ACTION_SET_TUNNEL_UP = "com.wireguard.android.action.SET_TUNNEL_UP"
     private const val ACTION_SET_TUNNEL_DOWN = "com.wireguard.android.action.SET_TUNNEL_DOWN"
     private const val EXTRA_TUNNEL = "tunnel"
+    private const val TAG = "GroveVpn"
+    private val connectMutex = Mutex()
 
     fun isVpnActive(context: Context): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
@@ -44,6 +49,7 @@ object VpnHelper {
     fun setTunnelUp(context: Context, tunnelName: String) {
         val trimmed = tunnelName.trim()
         if (trimmed.isEmpty() || !hasControlTunnelsPermission(context)) return
+        Log.d(TAG, "Sending SET_TUNNEL_UP for '$trimmed'")
         val intent = Intent(ACTION_SET_TUNNEL_UP)
             .setPackage(WIREGUARD_PACKAGE)
             .putExtra(EXTRA_TUNNEL, trimmed)
@@ -53,6 +59,7 @@ object VpnHelper {
     fun setTunnelDown(context: Context, tunnelName: String) {
         val trimmed = tunnelName.trim()
         if (trimmed.isEmpty() || !hasControlTunnelsPermission(context)) return
+        Log.d(TAG, "Sending SET_TUNNEL_DOWN for '$trimmed'")
         val intent = Intent(ACTION_SET_TUNNEL_DOWN)
             .setPackage(WIREGUARD_PACKAGE)
             .putExtra(EXTRA_TUNNEL, trimmed)
@@ -61,15 +68,20 @@ object VpnHelper {
 
     /**
      * Brings up [tunnelName], waits up to [timeoutMs] for `TRANSPORT_VPN` to appear,
-     * and briefly polls [probe] until routes are ready.
+     * and briefly polls [probe] until routes are ready. Serialized by [connectMutex] so
+     * launch and sync paths never race each other.
      */
     suspend fun connectTunnelAndProbe(
         context: Context,
         tunnelName: String,
-        timeoutMs: Long = 5_000L,
+        timeoutMs: Long = 8_000L,
         probe: suspend () -> Boolean,
-    ): Boolean {
-        if (tunnelName.isBlank() || !hasControlTunnelsPermission(context)) return false
+    ): Boolean = connectMutex.withLock {
+        if (tunnelName.isBlank() || !hasControlTunnelsPermission(context)) return@withLock false
+        if (isVpnActive(context) && probe()) {
+            Log.d(TAG, "VPN already active and reachable for '$tunnelName'")
+            return@withLock true
+        }
         setTunnelUp(context, tunnelName)
 
         val vpnUp = if (isVpnActive(context)) {
@@ -77,15 +89,22 @@ object VpnHelper {
         } else {
             awaitVpnTransport(context, timeoutMs)
         }
-        if (!vpnUp) return false
-
-        // TRANSPORT_VPN can appear a few ms before WireGuard finishes installing routes.
-        val deadline = System.currentTimeMillis() + 2_500L
-        while (System.currentTimeMillis() < deadline) {
-            if (probe()) return true
-            delay(250L)
+        if (!vpnUp) {
+            Log.w(TAG, "Timed out waiting for TRANSPORT_VPN for '$tunnelName'")
+            return@withLock false
         }
-        return false
+
+        // TRANSPORT_VPN can appear before WireGuard finishes handshake / installing routes.
+        val deadline = System.currentTimeMillis() + 4_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (probe()) {
+                Log.d(TAG, "Tunnel '$tunnelName' is up and reachable")
+                return@withLock true
+            }
+            delay(300L)
+        }
+        Log.w(TAG, "TRANSPORT_VPN came up for '$tunnelName' but probe did not succeed")
+        false
     }
 
     private suspend fun awaitVpnTransport(context: Context, timeoutMs: Long): Boolean {
