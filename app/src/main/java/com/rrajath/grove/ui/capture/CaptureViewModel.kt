@@ -21,6 +21,7 @@ import com.rrajath.grove.data.GroveDatabase
 import com.rrajath.grove.org.OrgDocument
 import com.rrajath.grove.org.OrgMutations
 import com.rrajath.grove.org.OrgParser
+import com.rrajath.grove.remote.EmacsServerException
 import com.rrajath.grove.remote.EmacsUnreachableException
 import com.rrajath.grove.settings.SettingsSource
 import com.rrajath.grove.sync.SyncTrigger
@@ -170,8 +171,9 @@ class CaptureViewModel(
                 sync.requestReindex(fileName, newText, "capture saved")
                 draftInsertion = null
                 _saveState.value = SaveState.Saved(fileName)
-            } catch (e: EmacsUnreachableException) {
-                if (offlineCaptureQueue != null && template.kind == TemplateKind.PLAIN) {
+            } catch (e: Exception) {
+                val isOffline = e is EmacsUnreachableException || (e is EmacsServerException && e.statusCode >= 500)
+                if (isOffline && offlineCaptureQueue != null && template.kind == TemplateKind.PLAIN) {
                     offlineCaptureQueue.enqueue(
                         targetFile = template.targetFile,
                         location = template.location,
@@ -182,11 +184,11 @@ class CaptureViewModel(
                     )
                     draftInsertion = null
                     _saveState.value = SaveState.Saved("${template.targetFile} (queued offline)")
-                } else {
+                } else if (isOffline) {
                     _saveState.value = SaveState.Failed(e.message ?: "Emacs server unreachable")
+                } else {
+                    _saveState.value = SaveState.Failed(e.message ?: "Capture failed")
                 }
-            } catch (e: Exception) {
-                _saveState.value = SaveState.Failed(e.message ?: "Capture failed")
             }
         }
     }

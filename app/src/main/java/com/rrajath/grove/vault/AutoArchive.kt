@@ -80,9 +80,14 @@ object AutoArchive {
      * The Settings-configured default archive location, or null if none is set or auto-archive
      * is off (the location belongs to that setting; `ARCHIVE` properties still resolve without it).
      */
-    fun settingsFallback(settings: GroveSettings): ArchiveTarget? =
+    fun settingsFallback(settings: GroveSettings, sourceFile: String? = null): ArchiveTarget? =
         settings.autoArchiveFile?.takeIf { settings.autoArchiveDoneItems }?.let { file ->
-            ArchiveTarget(file, settings.autoArchiveHeadingPath.split('/').filter { it.isNotEmpty() })
+            val resolvedFile = if (sourceFile != null && file.contains("%s")) {
+                file.replace("%s", sourceFile)
+            } else {
+                file
+            }
+            ArchiveTarget(resolvedFile, settings.autoArchiveHeadingPath.split('/').filter { it.isNotEmpty() })
         }
 
     suspend fun apply(
@@ -108,7 +113,7 @@ object AutoArchive {
             movedHeadline.keyword != null && doc.keywords.isDone(movedHeadline.keyword)
         if (!shouldArchive) return plain()
 
-        val target = ArchiveLocation.resolve(plainDoc, movedHeadline, settingsFallback(settings), fileName) ?: return plain()
+        val target = ArchiveLocation.resolve(plainDoc, movedHeadline, settingsFallback(settings, fileName), fileName) ?: return plain()
         val write = refileSubtree(vault, plainDoc, fileName, movedHeadline, target, archivedAt = now) ?: return plain()
 
         return StateChangeResult.Archived(
@@ -192,7 +197,7 @@ object AutoArchive {
         val cur = edit.doc
 
         val sources = if (!settings.autoArchiveDoneItems) emptyList() else {
-            val fallback = settingsFallback(settings)
+            val fallback = settingsFallback(settings, fileName)
             // As in [apply]: a repeating task keeps an active keyword, so it never archives.
             val archiving = changedIndices.mapNotNull { index ->
                 cur.headlines.getOrNull(index)?.takeIf { h -> h.keyword != null && doc.keywords.isDone(h.keyword) }

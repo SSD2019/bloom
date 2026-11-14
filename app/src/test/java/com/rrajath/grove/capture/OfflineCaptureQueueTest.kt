@@ -79,5 +79,26 @@ class OfflineCaptureQueueTest {
         val secondIdx = content.indexOf("* Second offline task")
         assertTrue(firstIdx >= 0 && secondIdx > firstIdx)
     }
+
+    @Test
+    fun `flush stops on 5xx server error preserving FIFO order`() = runTest {
+        val dao = FakePendingDao()
+        val queue = OfflineCaptureQueue(dao)
+
+        val failingStore = object : com.rrajath.grove.vault.FileStore by JvmFileStore(tmp.root) {
+            override suspend fun write(name: String, content: String) {
+                throw com.rrajath.grove.remote.EmacsServerException(502, "Bad Gateway")
+            }
+        }
+        val vault = Vault(failingStore, OrgKeywords.DEFAULT)
+
+        queue.enqueue("inbox.org", TargetLocation.BottomOfFile, "* Task 1", false)
+        queue.enqueue("inbox.org", TargetLocation.BottomOfFile, "* Task 2", false)
+
+        val result = queue.flush(vault, OrgKeywords.DEFAULT)
+        assertEquals(0, result.flushed)
+        assertEquals(2, result.remaining)
+        assertTrue(result.stoppedOffline)
+    }
 }
 

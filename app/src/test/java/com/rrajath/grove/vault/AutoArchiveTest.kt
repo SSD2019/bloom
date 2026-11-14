@@ -96,6 +96,12 @@ class AutoArchiveTest {
         val on = GroveSettings(autoArchiveDoneItems = true, autoArchiveFile = "archive.org", autoArchiveHeadingPath = "Done")
         assertEquals(com.rrajath.grove.org.ArchiveTarget("archive.org", listOf("Done")), AutoArchive.settingsFallback(on))
         org.junit.Assert.assertNull(AutoArchive.settingsFallback(on.copy(autoArchiveDoneItems = false)))
+
+        val percentS = GroveSettings(autoArchiveDoneItems = true, autoArchiveFile = "%s_archive", autoArchiveHeadingPath = "Archive")
+        assertEquals(
+            com.rrajath.grove.org.ArchiveTarget("todo.org_archive", listOf("Archive")),
+            AutoArchive.settingsFallback(percentS, "todo.org"),
+        )
     }
 
     @Test

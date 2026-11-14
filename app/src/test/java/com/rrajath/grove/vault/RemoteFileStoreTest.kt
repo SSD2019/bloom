@@ -89,20 +89,56 @@ class RemoteFileStoreTest {
         assertEquals("PUT", putReq.method)
         assertArrayEquals(payload, putReq.body.readByteArray())
 
-        // Now statRaw + downloadRaw
+        // Now statRaw + downloadRaw for a file not yet in local cache
+        val downloadPayload = byteArrayOf(9, 8, 7)
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody("""{"name":"data/ab/123456/img.svgz","lastModified":3000,"size":5}"""),
+                .setBody("""{"name":"data/cd/789/other.png","lastModified":4000,"size":3}"""),
         )
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody(okio.Buffer().write(payload)),
+                .setBody(okio.Buffer().write(downloadPayload)),
         )
 
-        val readBytes = store.openInput("data/ab/123456/img.svgz").use { it.readBytes() }
-        assertArrayEquals(payload, readBytes)
+        val readBytes = store.openInput("data/cd/789/other.png").use { it.readBytes() }
+        assertArrayEquals(downloadPayload, readBytes)
+
+        val statReq = server.takeRequest()
+        assertEquals("GET", statReq.method)
+        assertTrue(statReq.path!!.contains("/v1/raw/stat"))
+
+        val getReq = server.takeRequest()
+        assertEquals("GET", getReq.method)
+        assertTrue(getReq.path!!.contains("/v1/raw/file"))
+    }
+
+    @Test
+    fun `renameRaw and moveDir update local attachment cache`() = runTest {
+        val payload = byteArrayOf(1, 2, 3)
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"name":"data/ab/123/pic.png","lastModified":1000,"size":3}"""),
+        )
+        store.openOutput("data/ab/123/pic.png").use { it.write(payload) }
+        server.takeRequest()
+
+        // Rename pic.png to photo.png
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
+        assertTrue(store.renameRaw("data/ab/123/pic.png", "photo.png"))
+        server.takeRequest()
+
+        // Move directory data/ab/123 to data/archived
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
+        assertTrue(store.moveDir("data/ab/123", "data/archived"))
+        server.takeRequest()
+
+        // Shut down server; the moved and renamed file should be readable offline from cache
+        server.shutdown()
+        val readOffline = store.openInput("data/archived/123/photo.png").use { it.readBytes() }
+        assertArrayEquals(payload, readOffline)
     }
 }
 

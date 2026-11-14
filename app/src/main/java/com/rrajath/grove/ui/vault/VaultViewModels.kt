@@ -2081,7 +2081,7 @@ class DocumentViewModel(
             // Offered for several headlines only when they all archive to the same place.
             val archiveTarget = (_state.value as? DocumentUiState.Loaded)?.let { loaded ->
                 sources
-                    .map { ArchiveLocation.resolve(loaded.document, it, AutoArchive.settingsFallback(settings), loaded.fileName) }
+                    .map { ArchiveLocation.resolve(loaded.document, it, AutoArchive.settingsFallback(settings, loaded.fileName), loaded.fileName) }
                     .distinct()
                     .singleOrNull()
             }

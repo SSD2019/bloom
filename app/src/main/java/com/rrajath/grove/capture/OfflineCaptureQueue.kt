@@ -3,6 +3,7 @@ package com.rrajath.grove.capture
 import com.rrajath.grove.data.PendingCaptureDao
 import com.rrajath.grove.data.PendingCaptureEntity
 import com.rrajath.grove.org.OrgKeywords
+import com.rrajath.grove.remote.EmacsServerException
 import com.rrajath.grove.remote.EmacsUnreachableException
 import com.rrajath.grove.vault.Vault
 import kotlinx.coroutines.flow.Flow
@@ -70,6 +71,12 @@ class OfflineCaptureQueue(private val dao: PendingCaptureDao) {
             } catch (e: EmacsUnreachableException) {
                 dao.setError(item.id, e.message)
                 return FlushResult(flushed = flushed, remaining = items.size - flushed, stoppedOffline = true)
+            } catch (e: EmacsServerException) {
+                if (e.statusCode >= 500) {
+                    dao.setError(item.id, e.message)
+                    return FlushResult(flushed = flushed, remaining = items.size - flushed, stoppedOffline = true)
+                }
+                dao.setError(item.id, e.message)
             } catch (e: Exception) {
                 // Record non-connectivity error (e.g. missing target heading) and continue to next
                 dao.setError(item.id, e.message ?: e::class.simpleName)

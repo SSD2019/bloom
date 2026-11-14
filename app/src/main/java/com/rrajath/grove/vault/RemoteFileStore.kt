@@ -167,7 +167,9 @@ class RemoteFileStore(
             val newFile = safeCacheFile(vaultCacheDir, newName)
             if (oldFile.isFile) {
                 newFile.parentFile?.mkdirs()
+                val mtime = oldFile.lastModified()
                 oldFile.copyTo(newFile, overwrite = true)
+                if (mtime > 0) newFile.setLastModified(mtime)
                 oldFile.delete()
             }
             cachedRevisions.remove(oldName)?.let { cachedRevisions[newName] = it }
@@ -249,7 +251,21 @@ class RemoteFileStore(
     }
 
     override suspend fun renameRaw(name: String, newLeaf: String): Boolean = withContext(Dispatchers.IO) {
-        client.renameRaw(name, newLeaf)
+        val ok = client.renameRaw(name, newLeaf)
+        if (ok) {
+            val oldFile = safeCacheFile(attachCacheDir, name)
+            if (oldFile.isFile) {
+                val newFile = File(oldFile.parentFile, newLeaf)
+                oldFile.renameTo(newFile)
+            }
+            val oldMeta = safeCacheFile(attachCacheDir, "$name.bloom-meta")
+            if (oldMeta.isFile) {
+                val newRel = if ('/' in name) "${name.substringBeforeLast('/')}/$newLeaf" else newLeaf
+                val newMeta = safeCacheFile(attachCacheDir, "$newRel.bloom-meta")
+                oldMeta.renameTo(newMeta)
+            }
+        }
+        ok
     }
 
     override suspend fun deleteRaw(name: String): Boolean = withContext(Dispatchers.IO) {
@@ -284,7 +300,16 @@ class RemoteFileStore(
     }
 
     override suspend fun moveDir(src: String, dstParent: String): Boolean = withContext(Dispatchers.IO) {
-        client.moveDir(src, dstParent)
+        val ok = client.moveDir(src, dstParent)
+        if (ok) {
+            val srcDir = safeCacheFile(attachCacheDir, src)
+            if (srcDir.isDirectory) {
+                val dstDir = safeCacheFile(attachCacheDir, "$dstParent/${srcDir.name}")
+                dstDir.parentFile?.mkdirs()
+                srcDir.renameTo(dstDir)
+            }
+        }
+        ok
     }
 
     override suspend fun contentUri(name: String): Uri? {
