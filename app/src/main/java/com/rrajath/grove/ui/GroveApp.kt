@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
+import com.rrajath.grove.ui.nav.screen
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.rrajath.grove.GroveApplication
@@ -109,6 +109,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import com.rrajath.grove.ui.nav.popToNotebooksHome
 
 @Composable
 fun GroveApp(
@@ -246,6 +247,8 @@ private fun GroveNavigation(
     val scope = rememberCoroutineScope()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    // Read mode's breadcrumb "Notebooks" segment (see popToNotebooksHome).
+    val openNotebooksHome: () -> Unit = { navController.popToNotebooksHome() }
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext
             as com.rrajath.grove.GroveApplication
@@ -412,7 +415,7 @@ private fun GroveNavigation(
             popEnterTransition = navPopEnterTransition,
             popExitTransition = navPopExitTransition,
         ) {
-            composable(Routes.ONBOARDING) {
+            screen(Routes.ONBOARDING) {
                 OnboardingScreen(
                     onDone = {
                         viewModel.completeOnboarding()
@@ -424,7 +427,7 @@ private fun GroveNavigation(
                     onConnectRemoteEmacs = viewModel::connectRemoteEmacs,
                 )
             }
-            composable(Routes.NOTEBOOKS) {
+            screen(Routes.NOTEBOOKS) {
                 NotebooksScreen(
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onOpenSearch = { navController.navigate(Routes.search()) },
@@ -435,7 +438,7 @@ private fun GroveNavigation(
                     onOpenConflict = { id -> navController.navigate(Routes.conflict(id)) },
                 )
             }
-            composable(Routes.OUTLINE) { entry ->
+            screen(Routes.OUTLINE) { entry ->
                 val notebookId = entry.arguments?.getString("notebookId").orEmpty()
                 val narrowTo = entry.arguments?.getString("narrowTo")?.toIntOrNull()
                 val autoOpen = entry.arguments?.getString("auto") == "true"
@@ -462,6 +465,8 @@ private fun GroveNavigation(
                             popUpTo(Routes.OUTLINE) { inclusive = true }
                         }
                     },
+                    // Pushed, not replaced: Back returns to the wider outline.
+                    onNarrow = { line -> navController.navigate(Routes.outline(notebookId, narrowTo = line)) },
                     onOpenNote = { ref ->
                         // Always open in the mode configured in Settings.
                         navController.navigate(Routes.note(ref.encode(), settings.defaultNoteOpenMode.storageKey))
@@ -495,15 +500,16 @@ private fun GroveNavigation(
                     },
                 )
             }
-            composable(Routes.PREFACE) { entry ->
+            screen(Routes.PREFACE) { entry ->
                 val fileName = entry.arguments?.getString("fileName").orEmpty()
                 EditPrefaceScreen(
                     fileName = fileName,
                     onBack = { navController.popBackStack() },
                     editModeFontSize = settings.editModeFontSize,
+                    capitalizeHeadings = settings.capitalizeHeadings,
                 )
             }
-            composable(Routes.DRAWER) { entry ->
+            screen(Routes.DRAWER) { entry ->
                 val fileName = entry.arguments?.getString("fileName").orEmpty()
                 val noteId = entry.arguments?.getString("noteId")
                 val region = when (entry.arguments?.getString("kind")) {
@@ -517,9 +523,10 @@ private fun GroveNavigation(
                     noteId = noteId,
                     onBack = { navController.popBackStack() },
                     editModeFontSize = settings.editModeFontSize,
+                    capitalizeHeadings = settings.capitalizeHeadings,
                 )
             }
-            composable(Routes.BLOCK) { entry ->
+            screen(Routes.BLOCK) { entry ->
                 EditRegionScreen(
                     fileName = entry.arguments?.getString("fileName").orEmpty(),
                     region = EditRegion.BLOCK,
@@ -527,9 +534,10 @@ private fun GroveNavigation(
                     blockLine = entry.arguments?.getString("line")?.toIntOrNull() ?: -1,
                     onBack = { navController.popBackStack() },
                     editModeFontSize = settings.editModeFontSize,
+                    capitalizeHeadings = settings.capitalizeHeadings,
                 )
             }
-            composable(Routes.FILE) { entry ->
+            screen(Routes.FILE) { entry ->
                 val fileName = entry.arguments?.getString("fileName").orEmpty()
                 // Local, not a nav argument, for the same reason as NOTE: the
                 // Read/Edit toggle must not re-navigate.
@@ -551,20 +559,23 @@ private fun GroveNavigation(
                 val hasPendingEdit = pendingKey.dirty && pendingKey.region == EditRegion.WHOLE_FILE &&
                     pendingKey.fileName == fileName
                 var confirmLeavePending by remember(fileName) { mutableStateOf(false) }
-                val leaveRead: () -> Unit = {
-                    if (hasPendingEdit) confirmLeavePending = true else navController.popBackStack()
+                // How the confirm dialog finishes leaving: Back, or the breadcrumb's Notebooks.
+                var pendingExit by remember(fileName) { mutableStateOf<() -> Unit>({ navController.popBackStack() }) }
+                val leaveVia: (() -> Unit) -> Unit = { exit ->
+                    if (hasPendingEdit) { pendingExit = exit; confirmLeavePending = true } else exit()
                 }
+                val leaveRead: () -> Unit = { leaveVia { navController.popBackStack() } }
                 androidx.activity.compose.BackHandler(enabled = mode == "read" && hasPendingEdit) { leaveRead() }
                 if (confirmLeavePending) {
                     UnsavedNoteDialog(
                         message = "This file has unsaved changes.",
                         onSave = {
                             confirmLeavePending = false
-                            editorViewModel.save { navController.popBackStack() }
+                            editorViewModel.save { pendingExit() }
                         },
                         onDiscard = {
                             confirmLeavePending = false
-                            navController.popBackStack()
+                            pendingExit()
                         },
                         onDismiss = { confirmLeavePending = false },
                     )
@@ -579,6 +590,7 @@ private fun GroveNavigation(
                         onBack = { mode = "read" },
                         onSwitchToRead = { mode = "read" },
                         editModeFontSize = settings.editModeFontSize,
+                        capitalizeHeadings = settings.capitalizeHeadings,
                         showBacklinks = settings.roamFeaturesEnabled && settings.roamShowBacklinks,
                         roamSuggestionsEnabled = settings.roamSuggestionsActive,
                         onOpenNote = { target -> navController.navigate(Routes.note(target.encode())) },
@@ -600,6 +612,7 @@ private fun GroveNavigation(
                         // Explicit outline (no autoOpen): the filename tap must land
                         // on the outline even when this file would auto-open whole.
                         onOpenOutline = { target -> navController.navigate(Routes.outline(target)) },
+                        onOpenNotebooks = { leaveVia(openNotebooksHome) },
                         onOpenDrawer = { kind, drawerRef ->
                             navController.navigate(Routes.drawer(drawerRef.fileName, kind, drawerRef.encode()))
                         },
@@ -624,7 +637,7 @@ private fun GroveNavigation(
             // Date-to-date navigation (swipe / nav pill / Today / date picker) happens
             // inside DailyNoteScreen, not by re-navigating this route, so the route's
             // {date} is only the day it opens on.
-            composable(Routes.DAILIES) { entry ->
+            screen(Routes.DAILIES) { entry ->
                 val dateArg = entry.arguments?.getString("date")
                 val date = dateArg?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
                     ?: java.time.LocalDate.now()
@@ -639,9 +652,11 @@ private fun GroveNavigation(
                     showPropertyDrawers = settings.showPropertyDrawers,
                     readModeFontSize = settings.readModeFontSize,
                     editModeFontSize = settings.editModeFontSize,
+                    capitalizeHeadings = settings.capitalizeHeadings,
+                    onOpenImage = { path, name -> navController.navigate(Routes.attachmentViewer(path, name)) },
                 )
             }
-            composable(
+            screen(
                 Routes.NOTE,
                 deepLinks = DeepLinks.navDeepLinks(Routes.NOTE),
             ) { entry ->
@@ -708,13 +723,18 @@ private fun GroveNavigation(
                     var confirmLeavePending by remember(noteId) { mutableStateOf(false) }
                     var confirmDiscardBlankHeadingRead by remember(noteId) { mutableStateOf(false) }
                     var showEmptyHeadingAlertRead by remember(noteId) { mutableStateOf(false) }
-                    val leaveRead: () -> Unit = {
+                    // How the confirm dialogs finish leaving: Back (leaveNote), or the
+                    // breadcrumb's Notebooks segment.
+                    var pendingExit by remember(noteId) { mutableStateOf(leaveNote) }
+                    val leaveVia: (() -> Unit) -> Unit = { exit ->
+                        pendingExit = exit
                         when {
                             isNew && editorViewModel.isCurrentHeadingBlank() -> confirmDiscardBlankHeadingRead = true
                             hasPendingEdit -> confirmLeavePending = true
-                            else -> leaveNote()
+                            else -> exit()
                         }
                     }
+                    val leaveRead: () -> Unit = { leaveVia(leaveNote) }
                     androidx.activity.compose.BackHandler(
                         // A brand-new, still-blank note has nothing dirty (nothing was
                         // ever typed), so hasPendingEdit alone would miss it and let the
@@ -733,12 +753,12 @@ private fun GroveNavigation(
                                 if (editorViewModel.isCurrentHeadingBlank()) {
                                     showEmptyHeadingAlertRead = true
                                 } else {
-                                    editorViewModel.save { leaveNote() }
+                                    editorViewModel.save { pendingExit() }
                                 }
                             },
                             onDiscard = {
                                 confirmLeavePending = false
-                                leaveNote()
+                                pendingExit()
                             },
                             onDismiss = { confirmLeavePending = false },
                         )
@@ -747,7 +767,7 @@ private fun GroveNavigation(
                         DiscardBlankHeadingDialog(
                             onDiscard = {
                                 confirmDiscardBlankHeadingRead = false
-                                editorViewModel.deleteSubtree(onDeleted = { leaveNote() })
+                                editorViewModel.deleteSubtree(onDeleted = { pendingExit() })
                             },
                             // Send the user into edit mode to actually fix the heading,
                             // rather than strand them on a read view with nothing to show.
@@ -766,6 +786,7 @@ private fun GroveNavigation(
                             fileName = ref.fileName,
                             onBack = { mode = "read" },
                             editModeFontSize = settings.editModeFontSize,
+                            capitalizeHeadings = settings.capitalizeHeadings,
                         )
                     } else if (mode == "edit") {
                         EditNoteScreen(
@@ -774,6 +795,7 @@ private fun GroveNavigation(
                             initialCursorLine = editTargetLine,
                             editModeFontSize = settings.editModeFontSize,
                             newNoteCursor = settings.newNoteCursor,
+                            capitalizeHeadings = settings.capitalizeHeadings,
                             roamSuggestionsEnabled = settings.roamSuggestionsActive,
                             onBack = leaveNote,
                             onSwitchToRead = { editTargetLine = null; mode = "read" },
@@ -812,6 +834,7 @@ private fun GroveNavigation(
                             onOpenBreadcrumb = { targetLine ->
                                 navController.navigate(Routes.outline(ref.fileName, targetLine))
                             },
+                            onOpenNotebooks = { leaveVia(openNotebooksHome) },
                             onOpenDrawer = { kind, drawerRef ->
                                 navController.navigate(Routes.drawer(drawerRef.fileName, kind, drawerRef.encode()))
                             },
@@ -835,7 +858,7 @@ private fun GroveNavigation(
                     }
                 }
             }
-            composable(
+            screen(
                 Routes.REMINDER,
                 deepLinks = DeepLinks.navDeepLinks(Routes.REMINDER),
             ) { entry ->
@@ -855,7 +878,7 @@ private fun GroveNavigation(
                     },
                 )
             }
-            composable(
+            screen(
                 Routes.CAPTURE,
                 deepLinks = DeepLinks.navDeepLinks(Routes.CAPTURE),
             ) { entry ->
@@ -887,7 +910,7 @@ private fun GroveNavigation(
                     },
                 )
             }
-            composable(
+            screen(
                 Routes.CAPTURE_TEMPLATE,
                 // Launcher shortcuts (and any caller) can jump straight into a
                 // specific template's editor: bloom://capture/builtin-journal etc.
@@ -909,20 +932,22 @@ private fun GroveNavigation(
                         if (savedRoamFilePath != null) viewModel.showCaptureSavedSnack(savedRoamFilePath)
                     },
                     editModeFontSize = settings.editModeFontSize,
+                    capitalizeHeadings = settings.capitalizeHeadings,
                     roamSuggestionsEnabled = settings.roamSuggestionsActive,
+                    onOpenImage = { path, name -> navController.navigate(Routes.attachmentViewer(path, name)) },
                 )
             }
-            composable(Routes.TEMPLATE_EDIT) { entry ->
+            screen(Routes.TEMPLATE_EDIT) { entry ->
                 TemplateEditScreen(
                     templateId = entry.arguments?.getString("templateId").orEmpty(),
                     onBack = { navController.popBackStack() },
                     roamFeaturesEnabled = settings.roamFeaturesEnabled,
                 )
             }
-            composable(Routes.SYNC_LOG) {
+            screen(Routes.SYNC_LOG) {
                 SyncLogScreen(onBack = { navController.popBackStack() })
             }
-            composable(
+            screen(
                 Routes.SEARCH,
                 deepLinks = DeepLinks.navDeepLinks(Routes.SEARCH),
             ) { entry ->
@@ -935,7 +960,7 @@ private fun GroveNavigation(
                     onShowInNotebook = { ref -> navController.navigate(Routes.outline(ref.fileName, reveal = ref.lineIndex)) },
                 )
             }
-            composable(
+            screen(
                 Routes.AGENDA,
                 deepLinks = DeepLinks.navDeepLinks(Routes.AGENDA),
             ) {
@@ -945,13 +970,13 @@ private fun GroveNavigation(
                     onShowInNotebook = { ref -> navController.navigate(Routes.outline(ref.fileName, reveal = ref.lineIndex)) },
                 )
             }
-            composable(Routes.CONFLICT) { entry ->
+            screen(Routes.CONFLICT) { entry ->
                 ConflictScreen(
                     notebookId = entry.arguments?.getString("notebookId").orEmpty(),
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.SETTINGS) {
+            screen(Routes.SETTINGS) {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
                     onOpenAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
@@ -973,7 +998,7 @@ private fun GroveNavigation(
                     whatsNewHasUnseen = whatsNewHasUnseen,
                 )
             }
-            composable(Routes.SETTINGS_APPEARANCE) {
+            screen(Routes.SETTINGS_APPEARANCE) {
                 SettingsAppearanceScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -984,7 +1009,7 @@ private fun GroveNavigation(
                     onSetAppFontSize = viewModel::setAppFontSize,
                 )
             }
-            composable(Routes.SETTINGS_NOTEBOOKS) {
+            screen(Routes.SETTINGS_NOTEBOOKS) {
                 SettingsNotebooksScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -996,7 +1021,7 @@ private fun GroveNavigation(
                     onSetIgnoreList = viewModel::setIgnoreList,
                 )
             }
-            composable(Routes.SETTINGS_CAPTURE_TEMPLATES) {
+            screen(Routes.SETTINGS_CAPTURE_TEMPLATES) {
                 SettingsCaptureTemplatesScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1006,7 +1031,7 @@ private fun GroveNavigation(
                     onSetCaptureNotification = viewModel::setCaptureNotification,
                 )
             }
-            composable(Routes.SETTINGS_SYNC) {
+            screen(Routes.SETTINGS_SYNC) {
                 val pendingCount by viewModel.pendingCaptureCount.collectAsStateWithLifecycle()
                 SettingsSyncScreen(
                     settings = settings,
@@ -1022,7 +1047,7 @@ private fun GroveNavigation(
                     pendingCaptureCount = pendingCount,
                 )
             }
-            composable(Routes.SETTINGS_NOTES) {
+            screen(Routes.SETTINGS_NOTES) {
                 SettingsNotesScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1037,6 +1062,7 @@ private fun GroveNavigation(
                     onSetAddCreated = viewModel::setAddCreatedToNewNotes,
                     onSetNewNoteCursor = viewModel::setNewNoteCursor,
                     onSetAutoSaveNotes = viewModel::setAutoSaveNotes,
+                    onSetCapitalizeHeadings = viewModel::setCapitalizeHeadings,
                     onSetAutoArchiveDoneItems = viewModel::setAutoArchiveDoneItems,
                     onOpenArchiveLocationPicker = viewModel::startArchiveLocationPick,
                 )
@@ -1059,7 +1085,7 @@ private fun GroveNavigation(
                     )
                 }
             }
-            composable(Routes.SETTINGS_AGENDA) {
+            screen(Routes.SETTINGS_AGENDA) {
                 SettingsAgendaScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1068,7 +1094,7 @@ private fun GroveNavigation(
                     onSetAgendaDeadlineWarningDays = viewModel::setAgendaDeadlineWarningDays,
                 )
             }
-            composable(Routes.SETTINGS_WIDGET) {
+            screen(Routes.SETTINGS_WIDGET) {
                 SettingsWidgetScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1100,7 +1126,7 @@ private fun GroveNavigation(
                     )
                 }
             }
-            composable(Routes.SETTINGS_REMINDERS) {
+            screen(Routes.SETTINGS_REMINDERS) {
                 SettingsRemindersScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1111,7 +1137,7 @@ private fun GroveNavigation(
                     onSetReminderLeadTime = viewModel::setReminderLeadTime,
                 )
             }
-            composable(Routes.SETTINGS_SHARING) {
+            screen(Routes.SETTINGS_SHARING) {
                 SettingsSharingScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
@@ -1119,7 +1145,7 @@ private fun GroveNavigation(
                     onSetFetchSharedLinkTitles = viewModel::setFetchSharedLinkTitles,
                 )
             }
-            composable(Routes.SETTINGS_ROAM) {
+            screen(Routes.SETTINGS_ROAM) {
                 SettingsRoamScreen(
                     settings = settings,
                     directories = viewModel.directories.collectAsStateWithLifecycle().value,
@@ -1133,7 +1159,7 @@ private fun GroveNavigation(
                     onSetDailiesHeaderTemplate = viewModel::setDailiesHeaderTemplate,
                 )
             }
-            composable(Routes.ATTACHMENT_VIEWER) { entry ->
+            screen(Routes.ATTACHMENT_VIEWER) { entry ->
                 AttachmentViewerScreen(
                     path = entry.arguments?.getString("path").orEmpty(),
                     title = entry.arguments?.getString("title").orEmpty(),
@@ -1141,29 +1167,31 @@ private fun GroveNavigation(
                     onClose = { navController.popBackStack() },
                 )
             }
-            composable(Routes.SETTINGS_ATTACHMENTS) {
+            screen(Routes.SETTINGS_ATTACHMENTS) {
                 SettingsAttachmentsScreen(
                     settings = settings,
                     onBack = { navController.popBackStack() },
                     onSetPhotoSize = viewModel::setAttachPhotoSize,
                     onSetImageWidth = viewModel::setAttachImageWidth,
                     onSetImageWidthPx = viewModel::setAttachImageWidthPx,
+                    onSetAttachFolder = viewModel::setAttachFolder,
+                    onSetAttachAutoTag = viewModel::setAttachAutoTag,
                 )
             }
-            composable(Routes.SETTINGS_BACKUP) {
+            screen(Routes.SETTINGS_BACKUP) {
                 SettingsBackupScreen(
                     onBack = { navController.popBackStack() },
                     onExportSettings = viewModel::exportSettings,
                     onImportSettings = viewModel::importSettings,
                 )
             }
-            composable(Routes.SETTINGS_BUG_REPORT) {
+            screen(Routes.SETTINGS_BUG_REPORT) {
                 SettingsBugReportScreen(onBack = { navController.popBackStack() })
             }
-            composable(Routes.SETTINGS_TIPS) {
+            screen(Routes.SETTINGS_TIPS) {
                 SettingsTipsScreen(onBack = { navController.popBackStack() })
             }
-            composable(Routes.SETTINGS_WHATS_NEW) {
+            screen(Routes.SETTINGS_WHATS_NEW) {
                 // Opening the screen counts as seeing what's new: stamp the build so the
                 // launch-time WhatsNewDialog won't also fire for these same releases.
                 LaunchedEffect(Unit) { viewModel.markWhatsNewSeen() }
@@ -1172,7 +1200,7 @@ private fun GroveNavigation(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Routes.SETTINGS_DEVELOPER) {
+            screen(Routes.SETTINGS_DEVELOPER) {
                 SettingsDeveloperScreen(
                     onBack = { navController.popBackStack() },
                     onResetNewBadges = viewModel::resetNewBadges,
